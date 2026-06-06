@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { analyzeSwing, PHASES, type Analysis, type PhaseName } from "@/lib/analysis";
 import { createLandmarker, extractLandmarks, captureFrame } from "@/lib/pose";
 import { drawPose, drawGeometry } from "@/lib/draw";
@@ -25,6 +25,35 @@ export default function Page() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [stills, setStills] = useState<Still[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Preview the results layout without a real video: visit the page with #demo
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#demo") loadDemo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function loadDemo() {
+    const mk = (label: string) => {
+      const c = document.createElement("canvas");
+      c.width = 360; c.height = 640;
+      const x = c.getContext("2d")!;
+      const g = x.createLinearGradient(0, 0, 0, 640);
+      g.addColorStop(0, "#1c2a1f"); g.addColorStop(1, "#0a0e0a");
+      x.fillStyle = g; x.fillRect(0, 0, 360, 640);
+      x.strokeStyle = "rgba(95,211,106,0.5)"; x.lineWidth = 3;
+      x.beginPath(); x.moveTo(180, 120); x.lineTo(180, 470); x.stroke();
+      x.fillStyle = "#9be8a6"; x.font = "600 18px sans-serif"; x.fillText(label + " (demo)", 18, 40);
+      return c.toDataURL();
+    };
+    setStills(PHASES.map((n, i) => ({ name: n, time: [0.47, 1.3, 1.62, 2.2][i], url: mk(PHASE_LABEL[n]) })));
+    setAnalysis({
+      phases: { address: 0, top: 0, impact: 0, finish: 0 },
+      times: { address: 0.47, top: 1.3, impact: 1.62, finish: 2.2 },
+      metrics: { view: "down-the-line", tempoRatio: 2.7, backswingS: 0.83, downswingS: 0.31, headSwayPct: 6, headVertPct: 4, hipSwayBackPct: 9, hipSlideImpactPct: 15, spineAddrDeg: 48, spineTopDeg: 42, spineImpactDeg: 34, reverseSpineDeg: -6, secondaryTiltDeg: 14 },
+      faults: [], notes: [], detectedPct: 100, fps: 30,
+    });
+    setStage("done");
+  }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -123,7 +152,7 @@ export default function Page() {
       )}
 
       {stage === "done" && analysis && m && (
-        <>
+        <div className="results">
           <div className="frames">
             {stills.map((s) => (
               <div className="frame" key={s.name}>
@@ -214,7 +243,8 @@ export default function Page() {
             head stability and the key positions; spine / rotation numbers are approximate; it <b>can&apos;t diagnose a
             slice</b> (that needs club tracking or a launch monitor).
           </p>
-        </>
+          <p className="footer">Swing·CV · on-device pose via MediaPipe · no upload</p>
+        </div>
       )}
     </div>
   );
