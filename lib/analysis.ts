@@ -33,6 +33,33 @@ export type Metrics = {
 
 export type Fault = { title: string; mishit: string; detail: string; focus: string };
 
+// Hand (mid-wrist) speed over the swing, in body-heights per second.
+// Multiply by (standing height in m × 0.89) for m/s — nose-to-ankle ≈ 0.89 × stature.
+export type SpeedAnalysis = {
+  t: number[];
+  v: number[];
+  peak: number;
+  peakT: number;
+  impact: number;
+};
+
+export type SequencePeak = { name: "pelvis" | "torso" | "hands"; t: number; msBeforeImpact: number };
+
+// Kinematic-sequence approximation from single-camera depth estimates.
+// Order and timing are indicative; magnitudes are rough.
+export type SequenceAnalysis = {
+  t: number[];
+  pelvis: number[]; // angular speed toward the target, deg/s
+  torso: number[];
+  hands: number[]; // body-heights/s (same series as SpeedAnalysis.v)
+  peaks: SequencePeak[];
+  textbook: boolean;
+};
+
+export type XFactor = { topDeg: number; peakDeg: number; peakT: number; stretchPct: number };
+
+export type Quality = { ok: boolean; reason?: string };
+
 export type Analysis = {
   phases: Phases;
   times: Record<PhaseName, number>;
@@ -41,6 +68,10 @@ export type Analysis = {
   notes: string[];
   detectedPct: number;
   fps: number;
+  speed: SpeedAnalysis | null;
+  sequence: SequenceAnalysis | null;
+  xfactor: XFactor | null;
+  quality: Quality;
 };
 
 function smooth(x: number[], k = 5): number[] {
@@ -222,22 +253,199 @@ export function watchNotes(m: Metrics): string[] {
   return notes;
 }
 
-export function analyzeSwing(frames: Frame[], fps: number): Analysis {
+// Linear interpolation over NaN gaps (two-pointer, O(n)).
+function interpNaN(a: number[]): number[] {
+  const n = a.length;
+  const out = a.slice();
+  let prev = -1;
+  for (let i = 0; i < n; i++) {
+    if (Number.isNaN(out[i])) continue;
+    if (prev === -1 && i > 0) for (let j = 0; j < i; j++) out[j] = out[i];
+    else if (prev >= 0 && i - prev > 1)
+      for (let j = prev + 1; j < i; j++) out[j] = out[prev] + ((out[i] - out[prev]) * (j - prev)) / (i - prev);
+    prev = i;
+  }
+  if (prev >= 0) for (let j = prev + 1; j < n; j++) out[j] = out[prev];
+  return out;
+}
+
+export function computeSpeed(frames: Frame[], times: number[], phases: Phases): SpeedAnalysis | null {
+  const n = frames.length;
+  if (n < 7 || times.length !== n) return null;
+  const scale = bodyHeight(nearest(frames, phases.address));
+  const xs = new Array<number>(n).fill(NaN);
+  const ys = new Array<number>(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    const f = frames[i];
+    if (f) {
+      xs[i] = (f[L_WRIST].x + f[R_WRIST].x) / 2;
+      ys[i] = (f[L_WRIST].y + f[R_WRIST].y) / 2;
+    }
+  }
+  const px = smooth(interpNaN(xs), 3);
+  const py = smooth(interpNaN(ys), 3);
+  const v = new Array<number>(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    const dt = times[i + 1] - times[i - 1];
+    if (dt > 0) v[i] = Math.hypot(px[i + 1] - px[i - 1], py[i + 1] - py[i - 1]) / dt / scale;
+  }
+  v[0] = v[1];
+  v[n - 1] = v[n - 2];
+  const sv = smooth(v, 3);
+  let pi = phases.address;
+  for (let i = phases.address; i <= Math.min(phases.finish, n - 1); i++) if (sv[i] > sv[pi]) pi = i;
+  return { t: times.slice(), v: sv, peak: sv[pi], peakT: times[pi], impact: sv[phases.impact] };
+}
+
+// Rotation of a left-right landmark pair about the vertical axis, from (x, z).
+// MediaPipe z is a monocular depth estimate — usable for order/trend, not exact degrees.
+function rotationDeg(frames: Frame[], iL: number, iR: number): number[] | null {
+  const n = frames.length;
+  const raw = new Array<number>(n).fill(NaN);
+  let valid = 0;
+  for (let i = 0; i < n; i++) {
+    const f = frames[i];
+    if (f && f[iL].z !== undefined && f[iR].z !== undefined) {
+      raw[i] = Math.atan2(f[iR].z! - f[iL].z!, f[iR].x - f[iL].x);
+      valid++;
+    }
+  }
+  if (valid < n * 0.6) return null;
+  let prevI = -1;
+  for (let i = 0; i < n; i++) {
+    if (Number.isNaN(raw[i])) continue;
+    if (prevI >= 0) {
+      let d = raw[i] - raw[prevI];
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      raw[i] = raw[prevI] + d;
+    }
+    prevI = i;
+  }
+  return smooth(interpNaN(raw), 5).map((r) => (r * 180) / Math.PI);
+}
+
+export function computeSequence(
+  frames: Frame[],
+  times: number[],
+  phases: Phases,
+  hands: SpeedAnalysis | null
+): { sequence: SequenceAnalysis | null; xfactor: XFactor | null } {
+  const none = { sequence: null, xfactor: null };
+  if (!hands) return none;
+  const n = frames.length;
+  const sh = rotationDeg(frames, L_SH, R_SH);
+  const hip = rotationDeg(frames, L_HIP, R_HIP);
+  if (!sh || !hip) return none;
+
+  // Sign-normalize so the backswing coil reads positive regardless of handedness/camera side.
+  const turn = sh[phases.top] - sh[phases.address];
+  if (Math.abs(turn) < 25) return none; // too little visible rotation to trust
+  const s = turn > 0 ? 1 : -1;
+  const shN = sh.map((a) => (a - sh[phases.address]) * s);
+  const hipN = hip.map((a) => (a - hip[phases.address]) * s);
+
+  // Post-smoothing jumps mean the depth estimate was garbage in this clip.
+  for (let i = 1; i < n; i++)
+    if (Math.abs(shN[i] - shN[i - 1]) > 65 || Math.abs(hipN[i] - hipN[i - 1]) > 65) return none;
+
+  // Angular speed toward the target (positive during the downswing).
+  const omega = (a: number[]) => {
+    const o = new Array<number>(n).fill(0);
+    for (let i = 1; i < n - 1; i++) {
+      const dt = times[i + 1] - times[i - 1];
+      if (dt > 0) o[i] = -(a[i + 1] - a[i - 1]) / dt;
+    }
+    o[0] = o[1];
+    o[n - 1] = o[n - 2];
+    return smooth(o, 3);
+  };
+  const wP = omega(hipN);
+  const wT = omega(shN);
+
+  const lo = Math.max(phases.address, phases.top - 2);
+  const hi = Math.min(n - 1, phases.impact + 2);
+  const peakIn = (arr: number[]) => {
+    let b = lo;
+    for (let i = lo; i <= hi; i++) if (arr[i] > arr[b]) b = i;
+    return b;
+  };
+  const pP = peakIn(wP);
+  const pT = peakIn(wT);
+  const pH = peakIn(hands.v);
+  if (wP[pP] < 60 || wT[pT] < 60) return none; // no real downswing rotation signal
+
+  const tImpact = times[phases.impact];
+  const peaks: SequencePeak[] = [
+    { name: "pelvis" as const, t: times[pP], msBeforeImpact: Math.round((tImpact - times[pP]) * 1000) },
+    { name: "torso" as const, t: times[pT], msBeforeImpact: Math.round((tImpact - times[pT]) * 1000) },
+    { name: "hands" as const, t: times[pH], msBeforeImpact: Math.round((tImpact - times[pH]) * 1000) },
+  ].sort((a, b) => a.t - b.t);
+  const textbook = peaks[0].name === "pelvis" && peaks[1].name === "torso" && peaks[2].name === "hands";
+
+  const sequence: SequenceAnalysis = { t: times.slice(), pelvis: wP, torso: wT, hands: hands.v, peaks, textbook };
+
+  // X-factor: shoulder–hip separation. Top value vs peak in the early downswing —
+  // the stretch (not the static top number) is what separates skill levels in the research.
+  const xf = shN.map((a, i) => a - hipN[i]);
+  const xfTop = xf[phases.top];
+  let xPeakI = phases.top;
+  const xHi = Math.min(n - 1, phases.top + Math.max(2, Math.ceil((phases.impact - phases.top) * 0.7)));
+  for (let i = phases.top; i <= xHi; i++) if (xf[i] > xf[xPeakI]) xPeakI = i;
+  const xfactor: XFactor | null =
+    xfTop > 12
+      ? { topDeg: xfTop, peakDeg: xf[xPeakI], peakT: times[xPeakI], stretchPct: ((xf[xPeakI] - xfTop) / xfTop) * 100 }
+      : null;
+
+  return { sequence, xfactor };
+}
+
+// Gate for long-video windows: did this segment actually contain a swing?
+export function swingQuality(frames: Frame[], phases: Phases, fps: number): Quality {
+  const n = frames.length;
+  const span = Math.max(1, phases.finish - phases.address + 1);
+  let det = 0;
+  for (let i = phases.address; i <= phases.finish; i++) if (frames[i]) det++;
+  if (det / span < 0.4) return { ok: false, reason: "body tracking too patchy" };
+  const back = (phases.top - phases.address) / fps;
+  const down = (phases.impact - phases.top) / fps;
+  if (back < 0.25 || back > 3.5) return { ok: false, reason: "no clear backswing" };
+  if (down < 0.06 || down > 1.3) return { ok: false, reason: "no clear downswing" };
+  const hy = new Array<number>(n).fill(NaN);
+  for (let i = 0; i < n; i++) {
+    const f = frames[i];
+    if (f) hy[i] = (f[L_WRIST].y + f[R_WRIST].y) / 2;
+  }
+  const sig = smooth(interpNaN(hy), 5);
+  const scale = bodyHeight(nearest(frames, phases.address));
+  if ((sig[phases.address] - sig[phases.top]) / scale < 0.22)
+    return { ok: false, reason: "hands never rose like a swing" };
+  return { ok: true };
+}
+
+export function analyzeSwing(frames: Frame[], fps: number, times?: number[]): Analysis {
   const det = frames.filter(Boolean).length;
   const phases = detectPhases(frames);
+  const ts = times && times.length === frames.length ? times : frames.map((_, i) => i / fps);
   const metrics = computeMetrics(frames, phases, fps);
+  const speed = computeSpeed(frames, ts, phases);
+  const { sequence, xfactor } = computeSequence(frames, ts, phases, speed);
   return {
     phases,
     times: {
-      address: phases.address / fps,
-      top: phases.top / fps,
-      impact: phases.impact / fps,
-      finish: phases.finish / fps,
+      address: ts[phases.address],
+      top: ts[phases.top],
+      impact: ts[phases.impact],
+      finish: ts[phases.finish],
     },
     metrics,
     faults: flagFaults(metrics),
     notes: watchNotes(metrics),
     detectedPct: (100 * det) / frames.length,
     fps,
+    speed,
+    sequence,
+    xfactor,
+    quality: swingQuality(frames, phases, fps),
   };
 }

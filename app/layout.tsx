@@ -2,16 +2,15 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Swing CV — golf swing analyzer",
+  title: "Swing·CV — on-device golf swing lab",
   description:
-    "On-device golf swing analysis (pose overlay + tempo, head stability, key positions). Your video never leaves your device.",
+    "Golf swing analysis in the browser: skeleton + hand-tracer slow-mo, tempo, hand speed, kinematic sequence and swing-to-swing consistency. Runs entirely on your device — your video never uploads.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
-  themeColor: "#0a0e0a",
+  themeColor: "#060a07",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

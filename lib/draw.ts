@@ -30,6 +30,44 @@ export function drawPose(ctx: CanvasRenderingContext2D, lm: LM[], w: number, h: 
   }
 }
 
+// Hand-path tracer: mid-wrist trail up to the current frame, comet-style
+// (older segments fade, the leading edge glows).
+export function drawTrail(
+  ctx: CanvasRenderingContext2D,
+  pts: ([number, number] | null)[],
+  upto: number,
+  w: number,
+  h: number
+): void {
+  const last = Math.min(upto, pts.length - 1);
+  if (last < 1) return;
+  const unit = Math.max(2, Math.round(w / 260));
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let j = 1; j <= last; j++) {
+    const a = pts[j - 1];
+    const b = pts[j];
+    if (!a || !b) continue;
+    const r = j / last;
+    ctx.strokeStyle = `rgba(255,176,86,${(0.08 + 0.72 * Math.pow(r, 1.5)).toFixed(3)})`;
+    ctx.lineWidth = unit * (0.6 + 1.4 * r);
+    ctx.shadowColor = "rgba(255,176,86,0.8)";
+    ctx.shadowBlur = last - j < 6 ? 9 : 0;
+    ctx.beginPath();
+    ctx.moveTo(a[0] * w, a[1] * h);
+    ctx.lineTo(b[0] * w, b[1] * h);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  const tip = pts[last];
+  if (tip) {
+    ctx.fillStyle = "#ffd9a8";
+    ctx.beginPath();
+    ctx.arc(tip[0] * w, tip[1] * h, unit * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
 // Spine line (cyan) + shoulder/hip lines (magenta) — the geometry the metrics use.
 export function drawGeometry(ctx: CanvasRenderingContext2D, lm: LM[], w: number, h: number): void {
   const unit = Math.max(2, Math.round(w / 200));
