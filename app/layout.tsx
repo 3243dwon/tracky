@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import Smooth from "@/components/Smooth";
+import Intro from "@/components/Intro";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -16,7 +18,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <Intro />
+        <Smooth />
+        {children}
+      </body>
     </html>
   );
 }

@@ -17,8 +17,26 @@ import SequenceCard from "@/components/SequenceCard";
 import ConsistencyCard from "@/components/ConsistencyCard";
 import ScrubHero from "@/components/ScrubHero";
 import GhostHero from "@/components/GhostHero";
+import Thread from "@/components/Thread";
 import Reveal from "@/components/Reveal";
 import CountUp from "@/components/CountUp";
+
+function Chars({ text, from = 0 }: { text: string; from?: number }) {
+  let i = from;
+  return (
+    <>
+      {text.split(" ").map((w, wi) => (
+        <span className="w" key={wi}>
+          {Array.from(w).map((ch, ci) => (
+            <span className="ch" style={{ "--i": i++ } as React.CSSProperties} key={ci}>
+              {ch}
+            </span>
+          ))}{" "}
+        </span>
+      ))}
+    </>
+  );
+}
 
 type Stage = "idle" | "model" | "scanning" | "processing" | "done" | "error";
 type Still = { name: PhaseName; time: number; url: string };
@@ -326,18 +344,34 @@ export default function Page() {
 
       {stage === "idle" && (
         <div className="landing">
-          <h2 className="landinghead">
-            See your swing like a <span>broadcast</span>.
-          </h2>
+          <Thread />
+          <Reveal>
+            <h2 className="landinghead">
+              <Chars text="See your swing like a" />
+              <span className="hl">
+                <Chars text="broadcast." from={24} />
+              </span>
+            </h2>
+          </Reveal>
           <p className="landingsub">
             Skeleton, hand tracer, tempo, speed and sequence — extracted from a phone clip, in your browser.
           </p>
 
           <GhostHero />
 
+          <div className="marquee" aria-hidden="true">
+            <div className="mq">
+              {[0, 1].map((k) => (
+                <span key={k}>
+                  ON-DEVICE ◇ NO UPLOAD ◇ TEMPO ◇ HAND SPEED ◇ KINEMATIC SEQUENCE ◇ TRACER ◇ CONSISTENCY ◇ STROKES-GAINED ◇&nbsp;
+                </span>
+              ))}
+            </div>
+          </div>
+
           <section className="bigstats">
             <Reveal>
-              <div className="bigstat">
+              <div className="bigstat" data-th>
                 <div className="bignum">~2/3</div>
                 <p>
                   of the amateur scoring gap is the <b>long game</b> — approach above all. Putting separates
@@ -347,7 +381,7 @@ export default function Page() {
               </div>
             </Reveal>
             <Reveal delay={70}>
-              <div className="bigstat">
+              <div className="bigstat" data-th>
                 <div className="bignum">r = 0.801</div>
                 <p>
                   skill tracks how well you repeat <b>your own</b> swing — not how closely you copy a model. Measured
@@ -356,7 +390,7 @@ export default function Page() {
               </div>
             </Reveal>
             <Reveal delay={140}>
-              <div className="bigstat">
+              <div className="bigstat" data-th>
                 <div className="bignum">0</div>
                 <p>
                   uploads. The pose model runs <b>inside your browser</b> — your video never leaves the device. No
@@ -368,7 +402,7 @@ export default function Page() {
 
           <Reveal>
             <div className="section-title">What you get from one clip</div>
-            <div className="featrow">
+            <div className="featrow" data-th>
               <div className="featcard">
                 <svg viewBox="0 0 120 70" aria-hidden="true">
                   <path className="minidraw" d="M14 60 C30 56 38 30 52 18 C60 11 70 12 78 22 C88 35 98 52 108 56" fill="none" stroke="#ffb056" strokeWidth="2.5" strokeLinecap="round" pathLength={100} />
@@ -400,7 +434,7 @@ export default function Page() {
           </Reveal>
 
           <Reveal>
-            <blockquote className="manifesto">
+            <blockquote className="manifesto" data-th>
               It will not invent a flaw to sound smart. It will not grade you against a &ldquo;perfect swing&rdquo; that
               doesn&apos;t exist. It cannot see your club face — <em>and it says so.</em> What it measures, it measures
               honestly.
@@ -408,7 +442,7 @@ export default function Page() {
           </Reveal>
 
           <Reveal>
-            <div className="cta2">
+            <div className="cta2" data-th>
               <button className="btn" onClick={() => fileRef.current?.click()}>
                 🎥&ensp;Analyze your swing
               </button>
