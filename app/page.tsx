@@ -10,8 +10,10 @@ import {
   type Extraction,
   type SwingWindow,
 } from "@/lib/pose";
+import { analyzeClub, type ClubAnalysis } from "@/lib/club";
 import { drawPose, drawGeometry } from "@/lib/draw";
 import Player from "@/components/Player";
+import ClubCard from "@/components/ClubCard";
 import SpeedChart from "@/components/SpeedChart";
 import SequenceCard from "@/components/SequenceCard";
 import ConsistencyCard from "@/components/ConsistencyCard";
@@ -47,6 +49,7 @@ type SwingResult = {
   win: SwingWindow;
   extraction: Extraction;
   analysis: Analysis;
+  club: ClubAnalysis | null;
   stills: Still[];
 };
 
@@ -165,8 +168,9 @@ export default function Page() {
         src: "",
         fileName: "demo.mov",
         win: { start: 0, end: 3.2 },
-        extraction: { frames: new Array(n).fill(null), times: t, fps, width: 360, height: 640, scrubs: [] },
+        extraction: { frames: new Array(n).fill(null), times: t, fps, width: 360, height: 640, scrubs: [], motion: null },
         analysis,
+        club: null,
         stills: PHASES.map((nm, i) => ({ name: nm, time: [0.47, 1.3, 1.63, 2.2][i], url: mk(PHASE_LABEL[nm]) })),
       };
     });
@@ -228,12 +232,15 @@ export default function Page() {
           setPct(0);
           setBusy(`Swing ${results.length + 1} — tracking your body…`);
           try {
-            const extraction = await extractLandmarks(video, lm, setPct, { window: win, scrubWidth: 480 });
+            const extraction = await extractLandmarks(video, lm, setPct, { window: win, scrubWidth: 480, motionWidth: 160 });
             const analysis = analyzeSwing(extraction.frames, extraction.fps, extraction.times);
             if (!analysis.quality.ok) {
               skips.push(`${fmtT(win.start)} in ${file.name}: ${analysis.quality.reason}`);
               continue;
             }
+            // Clubhead arc (v3.5) from the motion frames, then free that buffer.
+            const club = analyzeClub(extraction.motion, extraction.frames, analysis.phases);
+            extraction.motion = null;
             const tmp = document.createElement("canvas");
             const stills: Still[] = [];
             for (const name of PHASES) {
@@ -247,7 +254,7 @@ export default function Page() {
               }
               stills.push({ name, time, url: tmp.toDataURL("image/jpeg", 0.85) });
             }
-            results.push({ id: results.length, src: url, fileName: file.name, win, extraction, analysis, stills });
+            results.push({ id: results.length, src: url, fileName: file.name, win, extraction, analysis, club, stills });
           } catch (err) {
             skips.push(`${fmtT(win.start)} in ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -279,6 +286,10 @@ export default function Page() {
 
   const cur = swings[sel];
   const m = cur?.analysis.metrics;
+  const club = cur?.club ?? null;
+  // Body faults (pose) + the clubhead fault (motion), shown as one list.
+  const allFaults = cur ? [...cur.analysis.faults, ...(club?.fault ? [club.fault] : [])] : [];
+  const topFault = allFaults[0];
   const idle = stage === "idle" || stage === "done" || stage === "error";
 
   return (
@@ -526,6 +537,21 @@ export default function Page() {
             </Reveal>
           )}
 
+          {club && club.coveragePct > 0 && (
+            <Reveal>
+              <div className="section-title">Clubhead path · experimental</div>
+              <div className="card">
+                <ClubCard
+                  club={club}
+                  phases={cur.analysis.phases}
+                  impactUrl={cur.stills.find((s) => s.name === "impact")?.url ?? cur.stills[0].url}
+                  width={cur.extraction.width}
+                  height={cur.extraction.height}
+                />
+              </div>
+            </Reveal>
+          )}
+
           <Reveal>
             <div className="section-title">Reliable metrics</div>
             <div className="metrics">
@@ -566,8 +592,8 @@ export default function Page() {
 
           <Reveal>
             <div className="section-title">Faults that actually cost strokes</div>
-            {cur.analysis.faults.length > 0 ? (
-              cur.analysis.faults.map((f) => (
+            {allFaults.length > 0 ? (
+              allFaults.map((f) => (
                 <div className="flag" key={f.title}>
                   <div className="icon">!</div>
                   <div className="body">
@@ -613,11 +639,20 @@ export default function Page() {
           <Reveal>
           <div className="section-title">What to actually work on</div>
           <div className="card">
-            {cur.analysis.faults.length > 0 ? (
-              <p className="reco">
-                Your body is causing a destructive mishit. Priority: <b>{cur.analysis.faults[0].title}</b>. Build
-                practice that fixes the <b>strike</b>, then re-film to confirm it transferred.
-              </p>
+            {topFault ? (
+              topFault.focus === "slice / swing path" ? (
+                <p className="reco">
+                  Priority: <b>{topFault.title}</b>. The clubhead is coming down across the ball. Groove an{" "}
+                  <b>in-to-out path</b> — set a headcover (or towel) just outside the ball and miss it on the way
+                  down, feeling the club drop behind you in transition. Re-film and watch the magenta downswing arc
+                  move <b>inside</b> the cyan backswing.
+                </p>
+              ) : (
+                <p className="reco">
+                  Your body is causing a destructive mishit. Priority: <b>{topFault.title}</b>. Build practice that
+                  fixes the <b>strike</b>, then re-film to confirm it transferred.
+                </p>
+              )
             ) : (
               <p className="reco">
                 Your swing&apos;s gross positions look fine — but that&apos;s not the same as &ldquo;no leak.&rdquo;
@@ -638,8 +673,9 @@ export default function Page() {
             <summary>What this tool deliberately won&apos;t pretend to see</summary>
             <ul>
               <li>
-                <b>Club face &amp; club path</b> — the cause of a slice/hook. One camera tracking your body can&apos;t
-                measure them; that takes club tracking or a launch monitor.
+                <b>Club face</b> — the other half of why a ball curves. The experimental clubhead tracer follows the
+                head&apos;s <b>path</b> from motion and can flag an over-the-top loop, but it <b>can&apos;t see the
+                face angle</b> — so it can&apos;t separate a slice from a pull. That still takes a launch monitor.
               </li>
               <li>
                 <b>True 3D angles</b> — depth here is a single-camera estimate. Rotation numbers are trends, not
@@ -659,8 +695,9 @@ export default function Page() {
 
           <p className="disclaimer">
             Runs entirely on your device — nothing is uploaded. 2D single-camera pose: reliable for tempo, head
-            stability and key positions; rotation/speed numbers are honest estimates; it <b>can&apos;t diagnose a
-            slice</b>.
+            stability and key positions; rotation/speed and the clubhead tracer are honest estimates; it{" "}
+            <b>can&apos;t see the clubface</b>, so it flags an over-the-top path but can&apos;t separate a slice from a
+            pull.
           </p>
           <p className="footer">Swing·CV · on-device pose via MediaPipe · no upload · no account</p>
         </div>

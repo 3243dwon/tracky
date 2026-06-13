@@ -68,6 +68,44 @@ export function drawTrail(
   }
 }
 
+// Clubhead arc: backswing (cyan) and downswing (magenta) so an over-the-top
+// loop — the downswing coming down wider/outside the backswing — is visible.
+export function drawClubArc(
+  ctx: CanvasRenderingContext2D,
+  path: ({ x: number; y: number } | null)[],
+  address: number,
+  top: number,
+  impact: number,
+  w: number,
+  h: number
+): void {
+  const unit = Math.max(2, Math.round(w / 230));
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const seg = (lo: number, hi: number, color: string) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = unit * 1.4;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 6;
+    let prev: { x: number; y: number } | null = null;
+    for (let i = lo; i <= hi; i++) {
+      const p = path[i];
+      if (p) {
+        if (prev) {
+          ctx.beginPath();
+          ctx.moveTo(prev.x * w, prev.y * h);
+          ctx.lineTo(p.x * w, p.y * h);
+          ctx.stroke();
+        }
+        prev = p;
+      }
+    }
+  };
+  seg(address, top, "rgba(0,229,255,0.95)");      // backswing — cyan
+  seg(top, impact, "rgba(255,0,200,0.95)");        // downswing — magenta
+  ctx.shadowBlur = 0;
+}
+
 // Spine line (cyan) + shoulder/hip lines (magenta) — the geometry the metrics use.
 export function drawGeometry(ctx: CanvasRenderingContext2D, lm: LM[], w: number, h: number): void {
   const unit = Math.max(2, Math.round(w / 200));

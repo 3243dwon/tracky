@@ -35,6 +35,10 @@ function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
 }
 
 export type ScrubFrame = { idx: number; url: string };
+// Downscaled single-channel (luma) frames, one per sampled pose frame, for the
+// clubhead motion tracker (lib/club.ts). Captured only when opts.motionWidth is
+// set; freed by the caller once the club arc is computed.
+export type MotionStack = { w: number; h: number; data: Uint8ClampedArray[] };
 export type Extraction = {
   frames: Frame[];
   times: number[];
@@ -42,6 +46,7 @@ export type Extraction = {
   width: number;
   height: number;
   scrubs: ScrubFrame[];
+  motion: MotionStack | null;
 };
 export type SwingWindow = { start: number; end: number };
 
@@ -55,7 +60,7 @@ export async function extractLandmarks(
   video: HTMLVideoElement,
   landmarker: Landmarker,
   onProgress: (pct: number) => void,
-  opts: { sampleFps?: number; maxFrames?: number; window?: SwingWindow; scrubWidth?: number } = {}
+  opts: { sampleFps?: number; maxFrames?: number; window?: SwingWindow; scrubWidth?: number; motionWidth?: number } = {}
 ): Promise<Extraction> {
   const duration = video.duration;
   const width = video.videoWidth;
@@ -90,6 +95,19 @@ export async function extractLandmarks(
     scrubCanvas.height = Math.round((opts.scrubWidth * height) / Math.max(1, width));
   }
 
+  // Downscaled luma frames for the clubhead motion tracker.
+  let motionCtx: CanvasRenderingContext2D | null = null;
+  let motion: MotionStack | null = null;
+  if (opts.motionWidth) {
+    const mw = opts.motionWidth;
+    const mh = Math.max(2, Math.round((mw * height) / Math.max(1, width)));
+    const mc = document.createElement("canvas");
+    mc.width = mw;
+    mc.height = mh;
+    motionCtx = mc.getContext("2d", { willReadFrequently: true });
+    motion = { w: mw, h: mh, data: [] };
+  }
+
   for (let i = 0; i < nSamples; i++) {
     const t = start + i * step;
     await seekTo(video, t);
@@ -104,6 +122,16 @@ export async function extractLandmarks(
     }
     frames.push(res.landmarks && res.landmarks.length ? res.landmarks[0] : null);
     times.push(t);
+    if (motionCtx && motion) {
+      motionCtx.drawImage(video, 0, 0, motion.w, motion.h);
+      const rgba = motionCtx.getImageData(0, 0, motion.w, motion.h).data;
+      const luma = new Uint8ClampedArray(motion.w * motion.h);
+      for (let p = 0, q = 0; p < rgba.length; p += 4, q++) {
+        // Rec.601 luma; good enough to find the moving clubhead.
+        luma[q] = (rgba[p] * 77 + rgba[p + 1] * 150 + rgba[p + 2] * 29) >> 8;
+      }
+      motion.data.push(luma);
+    }
     if (scrubCanvas && scrubEvery && i % scrubEvery === 0) {
       const ctx = scrubCanvas.getContext("2d");
       if (ctx) {
@@ -115,7 +143,7 @@ export async function extractLandmarks(
   }
 
   tsEpoch = lastTs + 1000;
-  return { frames, times, fps, width, height, scrubs };
+  return { frames, times, fps, width, height, scrubs, motion };
 }
 
 // Capture a single frame (by absolute time) into a canvas for display.

@@ -265,6 +265,15 @@ header.app p { color: var(--muted); font-size: 13.5px; margin: 10px 0 0; }
 .note { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 8px 4px 4px; }
 .note b { color: #c8e2cc; font-weight: 600; }
 
+/* ---------- clubhead arc card ---------- */
+.clubcard { display: flex; flex-direction: column; gap: 6px; }
+.clubcanvas { width: 100%; height: auto; max-height: 70vh; object-fit: contain; border-radius: 10px; background: #000; }
+.clublegend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 12.5px; color: var(--muted); margin: 4px 2px 0; }
+.clublegend span { display: inline-flex; align-items: center; gap: 6px; }
+.clublegend .sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.clublegend .sw.cyan { background: #00e5ff; }
+.clublegend .sw.mag { background: #ff00c8; }
+
 /* ---------- honesty panel ---------- */
 .cantsee { margin-top: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 4px 18px; }
 .cantsee summary { cursor: pointer; padding: 12px 0; font-weight: 600; font-size: 14px; color: #c8e2cc; }
