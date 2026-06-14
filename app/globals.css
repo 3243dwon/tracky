@@ -265,6 +265,56 @@ header.app p { color: var(--muted); font-size: 13.5px; margin: 10px 0 0; }
 .note { color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 8px 4px 4px; }
 .note b { color: #c8e2cc; font-weight: 600; }
 
+/* ---------- swing library + compare ---------- */
+.libbtn {
+  position: absolute; top: 14px; right: 14px;
+  font: 600 13px/1 var(--font-d); color: var(--accent-2);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 14px; cursor: pointer;
+}
+.libbtn:hover { border-color: var(--accent); }
+
+.savebar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 0 0 14px; }
+.chip.save { background: rgba(76, 225, 126, 0.14); border-color: rgba(76, 225, 126, 0.4); color: var(--accent-2); }
+.chip.save:disabled { opacity: 0.6; cursor: default; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 50;
+  max-width: min(92vw, 460px); text-align: center;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+  color: var(--text); font-size: 13px; line-height: 1.4; padding: 11px 16px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+}
+
+.cmptop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.libbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 10px; }
+.libactions { display: flex; gap: 8px; }
+
+.libgrid { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 640px) { .libgrid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 920px) { .libgrid { grid-template-columns: repeat(4, 1fr); } }
+.libcard { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); overflow: hidden; display: flex; flex-direction: column; }
+.libcard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.libthumb { position: relative; border: 0; padding: 0; background: #000; cursor: pointer; display: block; aspect-ratio: 3 / 4; }
+.libthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.libview { position: absolute; left: 6px; bottom: 6px; font: 600 10px var(--font-m); text-transform: uppercase; letter-spacing: 0.04em; color: #cfe; background: rgba(0, 0, 0, 0.55); padding: 2px 6px; border-radius: 5px; }
+.libmeta { padding: 8px 10px 4px; }
+.libname { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.libnums { color: var(--accent-2); font-size: 12.5px; margin-top: 2px; }
+.libdate { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+.librow { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 9px; }
+.libsel { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; }
+.libdel { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 6px; }
+.libdel:hover { color: var(--bad); background: rgba(255, 107, 107, 0.1); }
+
+.cmpseg { margin: 4px 0 14px; }
+.cmpcols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cmpcol { margin: 0; }
+.cmpcol img { width: 100%; border-radius: 12px; display: block; background: #000; }
+.cmpcol figcaption { font-size: 12.5px; color: var(--text); margin-top: 6px; text-align: center; }
+.cmpcol figcaption .num { color: var(--muted); }
+.cmpwarn { color: var(--warn); }
+
 /* ---------- clubhead arc card ---------- */
 .clubcard { display: flex; flex-direction: column; gap: 6px; }
 .clubcanvas { width: 100%; height: auto; max-height: 70vh; object-fit: contain; border-radius: 10px; background: #000; }

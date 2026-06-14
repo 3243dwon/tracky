@@ -11,9 +11,23 @@ import {
   type SwingWindow,
 } from "@/lib/pose";
 import { analyzeClub, type ClubAnalysis } from "@/lib/club";
+import {
+  SCHEMA,
+  saveSwing,
+  getPayload,
+  getEstimate,
+  requestPersist,
+  encodeFramesXY,
+  decodeFramesXY,
+  estimatePayloadBytes,
+  type SavedMeta,
+  type SavedPayload,
+} from "@/lib/library";
 import { drawPose, drawGeometry } from "@/lib/draw";
 import Player from "@/components/Player";
 import ClubCard from "@/components/ClubCard";
+import Library from "@/components/Library";
+import ComparePanel from "@/components/ComparePanel";
 import SpeedChart from "@/components/SpeedChart";
 import SequenceCard from "@/components/SequenceCard";
 import ConsistencyCard from "@/components/ConsistencyCard";
@@ -43,7 +57,7 @@ function Chars({ text, from = 0 }: { text: string; from?: number }) {
 type Stage = "idle" | "model" | "scanning" | "processing" | "done" | "error";
 type Still = { name: PhaseName; time: number; url: string };
 type SwingResult = {
-  id: number;
+  id: string;
   src: string;
   fileName: string;
   win: SwingWindow;
@@ -51,6 +65,12 @@ type SwingResult = {
   analysis: Analysis;
   club: ClubAnalysis | null;
   stills: Still[];
+  saved?: boolean; // already in the library this session
+};
+
+type CompareData = {
+  a: { analysis: Analysis; stills: Still[]; meta: SavedMeta };
+  b: { analysis: Analysis; stills: Still[]; meta: SavedMeta };
 };
 
 const PHASE_LABEL: Record<PhaseName, string> = {
@@ -77,11 +97,23 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [heightCm, setHeightCmState] = useState(175);
   const [seekSig, setSeekSig] = useState<{ t: number; n: number } | null>(null);
+  const [overlay, setOverlay] = useState<"none" | "library" | "compare">("none");
+  const [compare, setCompare] = useState<CompareData | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [savedTick, setSavedTick] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const persistAsked = useRef(false);
+
+  function flash(m: string) {
+    setToast(m);
+    window.setTimeout(() => setToast((t) => (t === m ? null : t)), 4000);
+  }
 
   useEffect(() => {
     const saved = Number(localStorage.getItem("swingcv-height"));
     if (saved >= 120 && saved <= 220) setHeightCmState(saved);
     if (window.location.hash === "#demo") loadDemo();
+    if (window.location.hash === "#library") setOverlay("library");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -164,7 +196,7 @@ export default function Page() {
         quality: { ok: true },
       };
       return {
-        id: k,
+        id: crypto.randomUUID(),
         src: "",
         fileName: "demo.mov",
         win: { start: 0, end: 3.2 },
@@ -254,7 +286,7 @@ export default function Page() {
               }
               stills.push({ name, time, url: tmp.toDataURL("image/jpeg", 0.85) });
             }
-            results.push({ id: results.length, src: url, fileName: file.name, win, extraction, analysis, club, stills });
+            results.push({ id: crypto.randomUUID(), src: url, fileName: file.name, win, extraction, analysis, club, stills });
           } catch (err) {
             skips.push(`${fmtT(win.start)} in ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -284,6 +316,117 @@ export default function Page() {
     void onFiles(files);
   }
 
+  // Persist the current analysis to the on-device library (derived data only —
+  // no raw video; see lib/library.ts).
+  async function handleSave(r: SwingResult) {
+    if (saving || r.saved) return; // guard against a double-click double-write
+    setSaving(true);
+    try {
+      const a = r.analysis;
+      const payload: SavedPayload = {
+        id: r.id,
+        schema: SCHEMA,
+        analysis: a,
+        club: r.club,
+        stills: r.stills,
+        scrubs: r.extraction.scrubs,
+        frames: encodeFramesXY(r.extraction.frames),
+        times: r.extraction.times,
+        fps: r.extraction.fps,
+        width: r.extraction.width,
+        height: r.extraction.height,
+      };
+      const impact = r.stills.find((s) => s.name === "impact")?.url ?? r.stills[0]?.url ?? "";
+      const meta: SavedMeta = {
+        id: r.id,
+        schema: SCHEMA,
+        createdAt: Date.now(),
+        fileName: r.fileName,
+        label: r.fileName.replace(/\.[^.]+$/, ""),
+        view: a.metrics.view,
+        heightCmAtSave: heightCm,
+        tempoRatio: a.metrics.tempoRatio,
+        backswingS: a.metrics.backswingS,
+        downswingS: a.metrics.downswingS,
+        peakBh: a.speed ? a.speed.peak : null,
+        win: r.win,
+        thumb: impact,
+        hasFrames: true,
+        hasScrubs: r.extraction.scrubs.length > 0,
+        sizeBytes: estimatePayloadBytes(payload),
+      };
+      const est = await getEstimate();
+      if (est && est.quota > 0 && est.usage / est.quota > 0.9)
+        flash("Heads up: storage is nearly full — export or delete swings in the library.");
+      await saveSwing(meta, payload);
+      if (!persistAsked.current) {
+        persistAsked.current = true;
+        void requestPersist();
+      }
+      setSwings((list) => list.map((s) => (s.id === r.id ? { ...s, saved: true } : s)));
+      setSavedTick((t) => t + 1);
+      flash("Saved to your library (on this device). Open Library to compare.");
+    } catch (e) {
+      const quota = (e as { quota?: boolean })?.quota;
+      flash(quota ? "Storage full — delete a swing or export some from the library." : "Couldn't save this swing.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Reopen a saved swing: rebuild the Extraction (decode the slim frames + restore
+  // the scrub stills) so the full results view — including the scroll-scrub hero —
+  // comes back. The raw <video> can't return (not stored), so its slot shows the
+  // demobox; everything else renders from the saved derived data.
+  async function handleReopen(m: SavedMeta) {
+    const p = await getPayload(m.id);
+    if (!p) {
+      flash("This swing can't be opened (saved in an older format) — delete it from the library.");
+      return;
+    }
+    const extraction: Extraction = {
+      frames: decodeFramesXY(p.frames),
+      times: p.times,
+      fps: p.fps,
+      width: p.width,
+      height: p.height,
+      scrubs: p.scrubs,
+      motion: null,
+    };
+    const r: SwingResult = {
+      id: m.id,
+      src: "",
+      fileName: m.fileName,
+      win: m.win,
+      extraction,
+      analysis: p.analysis,
+      club: p.club,
+      stills: p.stills,
+      saved: true,
+    };
+    setSwings([r]);
+    setSel(0);
+    setSkipped([]);
+    setError(null);
+    setStage("done");
+    setOverlay("none");
+    window.scrollTo({ top: 0 });
+  }
+
+  async function handleCompare(am: SavedMeta, bm: SavedMeta) {
+    const [pa, pb] = await Promise.all([getPayload(am.id), getPayload(bm.id)]);
+    if (!pa || !pb) {
+      flash("One of these swings can't be opened — try another.");
+      return;
+    }
+    setCompare({
+      a: { analysis: pa.analysis, stills: pa.stills, meta: am },
+      b: { analysis: pb.analysis, stills: pb.stills, meta: bm },
+    });
+    setOverlay("compare");
+    window.scrollTo({ top: 0 });
+  }
+
   const cur = swings[sel];
   const m = cur?.analysis.metrics;
   const club = cur?.club ?? null;
@@ -291,6 +434,7 @@ export default function Page() {
   const allFaults = cur ? [...cur.analysis.faults, ...(club?.fault ? [club.fault] : [])] : [];
   const topFault = allFaults[0];
   const idle = stage === "idle" || stage === "done" || stage === "error";
+  const showMain = overlay === "none";
 
   return (
     <div className="wrap">
@@ -323,12 +467,24 @@ export default function Page() {
           <span className="hud">POSE · 33 PTS</span>
           <span className="hud">NO UPLOAD</span>
         </div>
+        <button className="libbtn" onClick={() => setOverlay("library")} title="Your saved swings">
+          📁 Library
+        </button>
       </header>
 
       <video ref={procRef} className="hidden" playsInline muted />
       <input ref={fileRef} type="file" accept="video/*" multiple hidden onChange={onInput} />
 
-      {idle && (
+      {toast && <div className="toast">{toast}</div>}
+
+      {overlay === "library" && (
+        <Library key={savedTick} onReopen={handleReopen} onCompare={handleCompare} onClose={() => setOverlay("none")} />
+      )}
+      {overlay === "compare" && compare && (
+        <ComparePanel a={compare.a} b={compare.b} onClose={() => setOverlay("library")} />
+      )}
+
+      {showMain && idle && (
         <div
           className={`card drop ${stage === "idle" ? "hero" : ""}`}
           onClick={() => fileRef.current?.click()}
@@ -347,13 +503,13 @@ export default function Page() {
         </div>
       )}
 
-      {error && (
+      {showMain && error && (
         <div className="card">
           <div className="error">{error}</div>
         </div>
       )}
 
-      {stage === "idle" && (
+      {showMain && stage === "idle" && (
         <div className="landing">
           <Thread />
           <Reveal>
@@ -465,7 +621,7 @@ export default function Page() {
         </div>
       )}
 
-      {(stage === "model" || stage === "scanning" || stage === "processing") && (
+      {showMain && (stage === "model" || stage === "scanning" || stage === "processing") && (
         <div className="card status">
           <div className="spinner" />
           {stage !== "model" && <div className="pct num">{pct}%</div>}
@@ -478,7 +634,7 @@ export default function Page() {
         </div>
       )}
 
-      {stage === "done" && cur && m && (
+      {showMain && stage === "done" && cur && m && (
         <div className="results">
           {swings.length > 1 && (
             <div className="swchips">
@@ -489,6 +645,21 @@ export default function Page() {
               ))}
             </div>
           )}
+
+          <div className="savebar">
+            {cur.src ? (
+              <button className="chip save" onClick={() => handleSave(cur)} disabled={!!cur.saved || saving}>
+                {cur.saved ? "✓ Saved to library" : saving ? "Saving…" : "💾 Save swing"}
+              </button>
+            ) : (
+              <span className="note" style={{ margin: 0 }}>
+                Reopened from your library — scroll the hero to scrub with the skeleton (the raw video isn&apos;t stored).
+              </span>
+            )}
+            <button className="chip" onClick={() => setOverlay("library")}>
+              📁 Library
+            </button>
+          </div>
 
           <ScrubHero key={cur.id} extraction={cur.extraction} analysis={cur.analysis} />
 
