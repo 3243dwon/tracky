@@ -178,7 +178,10 @@ export type SwingWindow = { start: number; end: number };
 // the landmarker — keep a module-level epoch so multiple windows/files stay monotonic.
 let tsEpoch = 0;
 
-// Seek through a time window at ~sampleFps and run the landmarker on each frame.
+// Sample a time window and run the landmarker on each frame. Frames are captured during
+// PLAYBACK via requestVideoFrameCallback — the only method iOS Safari reliably decodes to
+// canvas (seek-then-drawImage returns BLANK frames on iOS, which also made it crawl through
+// hundreds of timed-out seeks). Seeking is the fallback only when rVFC is unavailable.
 // `times` in the result are absolute video seconds.
 export async function extractLandmarks(
   video: HTMLVideoElement,
@@ -200,8 +203,7 @@ export async function extractLandmarks(
 
   let nSamples = Math.round(len * sampleFps);
   nSamples = Math.max(8, Math.min(maxFrames, nSamples));
-  const step = len / nSamples;
-  const fps = 1 / step;
+  const targetStep = len / nSamples; // desired seconds between samples
 
   const epoch = tsEpoch;
   const frames: Frame[] = [];
@@ -210,8 +212,7 @@ export async function extractLandmarks(
   let lastTs = epoch - 1;
   let prevGolfer: LM[] | null = null; // last frame's chosen body — keeps pickGolfer locked to it
 
-  // Downscaled stills captured along the way power the scroll-scrub hero —
-  // no video seeking needed at scroll time.
+  // Downscaled stills captured along the way power the scroll-scrub hero.
   let scrubCanvas: HTMLCanvasElement | null = null;
   const scrubEvery = opts.scrubWidth ? Math.max(1, Math.ceil(nSamples / 28)) : 0;
   if (opts.scrubWidth) {
@@ -233,9 +234,8 @@ export async function extractLandmarks(
     motion = { w: mw, h: mh, data: [] };
   }
 
-  for (let i = 0; i < nSamples; i++) {
-    const t = start + i * step;
-    await seekTo(video, t);
+  // Run pose + capture motion/scrub for the frame currently presented at absolute time t.
+  const capture = (t: number) => {
     let ts = epoch + Math.round((t - start) * 1000);
     if (ts <= lastTs) ts = lastTs + 1;
     lastTs = ts;
@@ -247,6 +247,7 @@ export async function extractLandmarks(
     }
     const golfer: Frame = res.landmarks && res.landmarks.length ? pickGolfer(res.landmarks, prevGolfer) : null;
     if (golfer) prevGolfer = golfer;
+    const idx = frames.length;
     frames.push(golfer);
     times.push(t);
     if (motionCtx && motion) {
@@ -254,32 +255,120 @@ export async function extractLandmarks(
       const rgba = motionCtx.getImageData(0, 0, motion.w, motion.h).data;
       const luma = new Uint8ClampedArray(motion.w * motion.h);
       for (let p = 0, q = 0; p < rgba.length; p += 4, q++) {
-        // Rec.601 luma; good enough to find the moving clubhead.
-        luma[q] = (rgba[p] * 77 + rgba[p + 1] * 150 + rgba[p + 2] * 29) >> 8;
+        luma[q] = (rgba[p] * 77 + rgba[p + 1] * 150 + rgba[p + 2] * 29) >> 8; // Rec.601 luma
       }
       motion.data.push(luma);
     }
-    if (scrubCanvas && scrubEvery && i % scrubEvery === 0) {
+    if (scrubCanvas && scrubEvery && idx % scrubEvery === 0) {
       const ctx = scrubCanvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(video, 0, 0, scrubCanvas.width, scrubCanvas.height);
-        scrubs.push({ idx: i, url: scrubCanvas.toDataURL("image/jpeg", 0.7) });
+        scrubs.push({ idx, url: scrubCanvas.toDataURL("image/jpeg", 0.7) });
       }
     }
-    onProgress(Math.round(((i + 1) / nSamples) * 100));
+    onProgress(Math.max(0, Math.min(100, Math.round(((t - start) / len) * 100))));
+  };
+
+  const v = video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => void;
+  };
+
+  if (typeof v.requestVideoFrameCallback === "function") {
+    // Play the window and grab presented frames — decodes reliably on iOS, runs ~real-time.
+    await seekTo(video, start);
+    video.muted = true;
+    video.playbackRate = 1;
+    try {
+      await video.play();
+    } catch {
+      /* muted inline autoplay is allowed on iOS */
+    }
+    let lastSampleT = -Infinity;
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const STALL_MS = 8000;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(watchdog);
+        resolve();
+      };
+      let watchdog = setTimeout(finish, STALL_MS);
+      const loop = (_: number, meta: { mediaTime: number }) => {
+        if (done) return;
+        clearTimeout(watchdog);
+        watchdog = setTimeout(finish, STALL_MS);
+        const t = meta.mediaTime;
+        if (t >= start - 0.05 && t - lastSampleT >= targetStep * 0.85) {
+          lastSampleT = t;
+          capture(Math.max(start, Math.min(end, t)));
+        }
+        if (t >= end || video.ended || frames.length >= maxFrames) {
+          finish();
+          return;
+        }
+        v.requestVideoFrameCallback!(loop);
+      };
+      v.requestVideoFrameCallback!(loop);
+      video.addEventListener("ended", finish, { once: true });
+      video.addEventListener("error", finish, { once: true });
+    });
+    video.pause();
+    video.playbackRate = 1;
+  } else {
+    // No rVFC — fall back to seeking (older desktop browsers).
+    for (let i = 0; i < nSamples; i++) {
+      const t = start + i * targetStep;
+      await seekTo(video, t);
+      capture(t);
+    }
   }
+
+  // Effective fps from the actual sample spacing (phase/tempo math is frame-index based).
+  const span = times.length > 1 ? times[times.length - 1] - times[0] : 0;
+  const fps = span > 0 ? (times.length - 1) / span : nSamples / len;
 
   tsEpoch = lastTs + 1000;
   return { frames, times, fps, width, height, scrubs, motion };
 }
 
-// Capture a single frame (by absolute time) into a canvas for display.
+// Capture a single frame (by absolute time) into a canvas for display. Grabs a presented
+// frame during a brief play — seek-then-drawImage returns blank on iOS Safari.
 export async function captureFrame(video: HTMLVideoElement, t: number, canvas: HTMLCanvasElement): Promise<void> {
-  await seekTo(video, t);
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   const ctx = canvas.getContext("2d");
-  if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  if (!ctx) return;
+  await seekTo(video, t);
+  const v = video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => void;
+  };
+  if (typeof v.requestVideoFrameCallback === "function") {
+    video.muted = true;
+    try {
+      await video.play();
+    } catch {
+      /* muted inline autoplay is allowed */
+    }
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const fin = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(wd);
+        resolve();
+      };
+      const wd = setTimeout(fin, 2500);
+      v.requestVideoFrameCallback!(() => {
+        if (done) return;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        fin();
+      });
+    });
+    video.pause();
+  } else {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  }
 }
 
 function median(a: number[]): number {
