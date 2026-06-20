@@ -106,34 +106,50 @@ export function drawClubArc(
   ctx.shadowBlur = 0;
 }
 
-// Ideal swing-plane "stick": the extended address shaft-plane line the downswing
-// should return on. Drawn dashed/white so it reads as a reference, not your path.
-export function drawPlaneLine(
+type Ln = { x1: number; y1: number; x2: number; y2: number };
+type P2 = { x: number; y: number };
+
+// Swing-plane reference lines: the IDEAL plane (dashed green, anchored at the ball)
+// and your ACTUAL shaft at the top extended through the butt (solid purple — where
+// 杆尾 points). A white dot marks the ball the butt should point back at.
+export function drawPlaneLines(
   ctx: CanvasRenderingContext2D,
-  line: { x1: number; y1: number; x2: number; y2: number },
-  grip: { x: number; y: number },
-  head: { x: number; y: number },
+  ideal: Ln,
+  topShaft: Ln,
+  ball: P2,
   w: number,
   h: number
 ): void {
   const unit = Math.max(2, Math.round(w / 300));
+  const stroke = (l: Ln) => {
+    ctx.beginPath();
+    ctx.moveTo(l.x1 * w, l.y1 * h);
+    ctx.lineTo(l.x2 * w, l.y2 * h);
+    ctx.stroke();
+  };
   ctx.save();
   ctx.lineCap = "round";
-  ctx.strokeStyle = "rgba(255,255,255,0.8)";
+
+  // ideal plane — dashed, accent green
+  ctx.strokeStyle = "rgba(120,230,150,0.85)";
   ctx.lineWidth = unit;
   ctx.setLineDash([Math.max(7, w / 55), Math.max(5, w / 80)]);
-  ctx.beginPath();
-  ctx.moveTo(line.x1 * w, line.y1 * h);
-  ctx.lineTo(line.x2 * w, line.y2 * h);
-  ctx.stroke();
+  stroke(ideal);
   ctx.setLineDash([]);
-  // anchor dots: clubhead (ball end) + grip
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
-  for (const p of [head, grip]) {
-    ctx.beginPath();
-    ctx.arc(p.x * w, p.y * h, unit * 1.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
+
+  // your shaft at the top — solid, glowing purple
+  ctx.strokeStyle = "rgba(190,90,255,0.95)";
+  ctx.lineWidth = unit * 1.5;
+  ctx.shadowColor = "rgba(190,90,255,0.7)";
+  ctx.shadowBlur = 7;
+  stroke(topShaft);
+  ctx.shadowBlur = 0;
+
+  // the ball — what the butt should point back at
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(ball.x * w, ball.y * h, unit * 2, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 

@@ -839,13 +839,13 @@ export default function Page() {
 
           {club && club.coveragePct > 0 && cur.analysis.metrics.view === "down-the-line" && (
             <Reveal>
-              <div className="section-title">Swing plane 挥杆平面 · experimental</div>
+              <div className="section-title">Swing plane 挥杆平面 · 杆尾指向 · experimental</div>
               <div className="card">
                 <PlaneCard
                   frames={cur.extraction.frames}
                   club={club}
                   phases={cur.analysis.phases}
-                  impactUrl={cur.stills.find((s) => s.name === "impact")?.url ?? cur.stills[0].url}
+                  backdropUrl={cur.stills.find((s) => s.name === "top")?.url ?? cur.stills[0].url}
                   width={cur.extraction.width}
                   height={cur.extraction.height}
                 />

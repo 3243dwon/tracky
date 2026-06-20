@@ -1,72 +1,57 @@
 import { describe, it, expect } from "vitest";
-import { analyzePlane, PLANE_DEV_THRESH } from "./plane";
+import { analyzePlane, PLANE_ON_THRESH } from "./plane";
 import type { ClubPoint } from "./club";
 import { buildSwing } from "@/test/fixtures";
 
-// Build a clubhead path with a known address anchor and downswing points placed a
-// fixed perpendicular offset off the address shaft plane, so we can drive the
-// deviation sign/magnitude deterministically (regardless of golf intuition).
-function buildPath(frames: ReturnType<typeof buildSwing>["frames"], phases: { address: number; top: number; impact: number; finish: number }, offset: number): ClubPoint[] {
+const { frames, phases } = buildSwing({ view: "down-the-line" });
+const BALL = { x: 0.5, y: 0.85 }; // clubhead at address ≈ the ball, low and centered
+
+// A path with the clubhead anchored at address (ball) and at the top. The top
+// clubhead x decides whether the shaft, extended through the butt, points at the
+// ball (on) or misses it to one side.
+function buildPath(topHeadX: number): ClubPoint[] {
   const path: ClubPoint[] = new Array(frames.length).fill(null);
-  const head = { x: 0.6, y: 0.85 }; // clubhead at address (out toward the ball, low)
-  path[phases.address] = { x: head.x, y: head.y, conf: 1 };
-  const a = frames[phases.address]!;
-  const grip = { x: (a[15].x + a[16].x) / 2, y: (a[15].y + a[16].y) / 2 };
-  let dx = grip.x - head.x,
-    dy = grip.y - head.y;
-  const L = Math.hypot(dx, dy) || 1;
-  dx /= L;
-  dy /= L;
-  const nx = -dy,
-    ny = dx; // unit perpendicular to the plane
-  const base = { x: (grip.x + head.x) / 2, y: (grip.y + head.y) / 2 }; // a point ON the plane
-  for (let i = phases.top; i <= phases.impact; i++) {
-    path[i] = { x: base.x + offset * nx, y: base.y + offset * ny, conf: 1 };
-  }
+  path[phases.address] = { x: BALL.x, y: BALL.y, conf: 1 };
+  path[phases.top] = { x: topHeadX, y: 0.15, conf: 1 }; // clubhead high at the top
   return path;
 }
 
-const { frames, phases } = buildSwing({ view: "down-the-line" });
-
-describe("analyzePlane", () => {
-  it("returns null when no clubhead can be anchored at address", () => {
+describe("analyzePlane (shaft / 杆尾 lines)", () => {
+  it("returns null without clubhead anchors at address and top", () => {
     const empty: ClubPoint[] = new Array(frames.length).fill(null);
     expect(analyzePlane(frames, empty, phases)).toBeNull();
+    const addrOnly: ClubPoint[] = new Array(frames.length).fill(null);
+    addrOnly[phases.address] = { x: 0.5, y: 0.85, conf: 1 };
+    expect(analyzePlane(frames, addrOnly, phases)).toBeNull(); // no top anchor
   });
 
-  it("reports a thin downswing trace as not-ok rather than guessing", () => {
-    const path: ClubPoint[] = new Array(frames.length).fill(null);
-    path[phases.address] = { x: 0.6, y: 0.85, conf: 1 }; // anchor only, no downswing points
-    const r = analyzePlane(frames, path, phases)!;
-    expect(r.ok).toBe(false);
-    expect(r.verdict).toBe("na");
-  });
-
-  it("builds the plane stick through the grip and clubhead at address", () => {
-    const r = analyzePlane(frames, buildPath(frames, phases, 0), phases)!;
+  it("builds the ideal plane line through the ball and the address grip", () => {
+    const r = analyzePlane(frames, buildPath(0.5), phases)!;
     expect(r.ok).toBe(true);
-    expect(r.head.x).toBeCloseTo(0.6, 5);
-    expect(r.grip.x).toBeCloseTo(0.5, 5); // wrist midpoint of the fixture
-    // grip and head both lie on the returned (extended) line
-    const onLine = (px: number, py: number) =>
-      Math.abs((r.line.x2 - r.line.x1) * (py - r.line.y1) - (r.line.y2 - r.line.y1) * (px - r.line.x1));
-    expect(onLine(r.grip.x, r.grip.y)).toBeLessThan(1e-6);
-    expect(onLine(r.head.x, r.head.y)).toBeLessThan(1e-6);
+    expect(r.ball.x).toBeCloseTo(0.5, 5);
+    // ball + address grip both lie on the ideal line
+    const onLine = (l: typeof r.idealLine, px: number, py: number) =>
+      Math.abs((l.x2 - l.x1) * (py - l.y1) - (l.y2 - l.y1) * (px - l.x1));
+    const gripA = { x: 0.5, y: frames[phases.address]![15].y }; // wrist-mid x is 0.5 in the fixture
+    expect(onLine(r.idealLine, r.ball.x, r.ball.y)).toBeLessThan(1e-6);
+    expect(onLine(r.idealLine, gripA.x, (frames[phases.address]![15].y + frames[phases.address]![16].y) / 2)).toBeLessThan(1e-6);
   });
 
-  it("reads a downswing on the plane as on-plane", () => {
-    const r = analyzePlane(frames, buildPath(frames, phases, 0), phases)!;
+  it("reads on-plane when the butt line points straight back at the ball", () => {
+    // clubhead@top, grip@top and the ball are all on x≈0.5 → the shaft extended
+    // passes through the ball.
+    const r = analyzePlane(frames, buildPath(0.5), phases)!;
     expect(r.verdict).toBe("on");
-    expect(Math.abs(r.devPct)).toBeLessThan(PLANE_DEV_THRESH);
+    expect(Math.abs(r.gapPct)).toBeLessThan(PLANE_ON_THRESH);
   });
 
-  it("reads opposite offsets as opposite sides (above vs below) with flipped sign", () => {
-    const out = analyzePlane(frames, buildPath(frames, phases, 0.15), phases)!;
-    const inn = analyzePlane(frames, buildPath(frames, phases, -0.15), phases)!;
-    expect(out.ok && inn.ok).toBe(true);
-    expect(out.verdict).not.toBe(inn.verdict);
-    expect([out.verdict, inn.verdict].sort()).toEqual(["above", "below"]);
-    expect(Math.sign(out.devPct)).toBe(-Math.sign(inn.devPct));
-    expect(Math.abs(out.devPct)).toBeGreaterThan(PLANE_DEV_THRESH); // 0.15 of body height ≈ 20%
+  it("flags outside vs inside the plane on opposite misses, with a flipped sign", () => {
+    const oneSide = analyzePlane(frames, buildPath(0.66), phases)!; // clubhead one side of the plane
+    const otherSide = analyzePlane(frames, buildPath(0.34), phases)!; // ...and the other
+    expect(oneSide.ok && otherSide.ok).toBe(true);
+    expect(oneSide.verdict).not.toBe(otherSide.verdict);
+    expect([oneSide.verdict, otherSide.verdict].sort()).toEqual(["in", "out"]);
+    expect(Math.sign(oneSide.gapPct)).toBe(-Math.sign(otherSide.gapPct));
+    expect(Math.abs(oneSide.gapPct)).toBeGreaterThan(PLANE_ON_THRESH);
   });
 });

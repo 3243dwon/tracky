@@ -1,41 +1,46 @@
-// Swing-plane guide: the "sticks pointing where the swing should be".
+// Swing-plane guide, the "where does 杆尾 (the butt of the club) point?" check —
+// the TrackMan-style reference lines.
 //
-// We take the ADDRESS SHAFT PLANE — the line through the hands (grip) and the
-// clubhead at setup — and extend it as the reference stick the downswing should
-// return on. Then we measure how far the traced clubhead path runs OFF that line
-// through the downswing: + = the over-the-top side (outside/above the plane,
-// the slice/pull path), − = dropped under/inside.
+// We draw two lines on the down-the-line view:
+//   • the IDEAL plane line — anchored at the ball (clubhead at address) and running
+//     up along the address shaft angle: where the shaft should lie / point.
+//   • your ACTUAL shaft at the top — the line through the clubhead and the hands,
+//     extended down THROUGH THE BUTT. On plane, that extension points back at the
+//     ball; outside it = steep / across the line (over-the-top tendency); inside =
+//     laid off.
 //
-// Honest 2D limits, same as the rest of the app: one camera can't see the
-// clubface, and this is a down-the-line concept — the caller only shows it for
-// DTL clips, and the magnitude is experimental (we cross-reference the club
-// loop read in the UI). Pure + deterministic so it's unit-tested.
-import { L_WRIST, R_WRIST, L_HIP, R_HIP, NOSE, L_ANK, R_ANK } from "./analysis";
+// Honest 2D limits hold (one camera reads the shaft line, not the clubface), so the
+// magnitude is experimental and the caller shows it only for DTL clips. Pure +
+// deterministic ⇒ unit-tested.
+import { L_WRIST, R_WRIST, NOSE, L_ANK, R_ANK } from "./analysis";
 import type { Frame, Phases } from "./analysis";
 import type { ClubPoint } from "./club";
 
-export type PlanePoint = { x: number; y: number };
-export type PlaneVerdict = "on" | "above" | "below" | "na";
-export type PlaneLine = { x1: number; y1: number; x2: number; y2: number };
+export type Pt = { x: number; y: number };
+export type Line = { x1: number; y1: number; x2: number; y2: number };
+export type PlaneVerdict = "on" | "out" | "in" | "na";
 
 export type PlaneAnalysis = {
   ok: boolean;
   reason?: string;
-  grip: PlanePoint; // hands at address
-  head: PlanePoint; // clubhead at address — the ball end of the stick
-  line: PlaneLine; // the extended reference stick, normalized [0..1]
-  devPct: number; // mean signed downswing deviation vs plane (% body height); + = above/over-the-top
-  maxDevPct: number; // worst single deviation (signed)
+  ball: Pt; // clubhead at address ≈ where the butt should point
+  idealLine: Line; // address shaft plane, extended — the reference
+  topShaft: Line; // actual shaft at the top, extended through the butt (杆尾)
+  gapPct: number; // signed distance of the clubhead-at-top from the ideal plane, % body height; + = outside (steep), − = inside (laid off)
   verdict: PlaneVerdict;
 };
 
-export const PLANE_DEV_THRESH = 4; // % of body height to call above / below vs on-plane
-const EXT = 1.3; // how far to extend the stick past grip / clubhead, in plane-direction units
+export const PLANE_ON_THRESH = 6; // % of body height the butt line can miss the ball and still read "on plane"
+const EXT = 1.4; // how far to extend each line past its two anchors (plane-direction units)
 
 function bodyHeight(lm: NonNullable<Frame>): number {
   const ax = (lm[L_ANK].x + lm[R_ANK].x) / 2,
     ay = (lm[L_ANK].y + lm[R_ANK].y) / 2;
   return Math.hypot(lm[NOSE].x - ax, lm[NOSE].y - ay) || 0.1;
+}
+
+function gripOf(lm: NonNullable<Frame>): Pt {
+  return { x: (lm[L_WRIST].x + lm[R_WRIST].x) / 2, y: (lm[L_WRIST].y + lm[R_WRIST].y) / 2 };
 }
 
 function nearestFrame(frames: Frame[], i: number): NonNullable<Frame> | null {
@@ -57,50 +62,52 @@ function nearestTracked(path: ClubPoint[], i: number, radius: number): ClubPoint
   return null;
 }
 
+// Line through a→b, extended past both anchors so it reads as a full reference line.
+function extend(a: Pt, b: Pt): Line {
+  let dx = b.x - a.x,
+    dy = b.y - a.y;
+  const L = Math.hypot(dx, dy) || 1e-6;
+  dx /= L;
+  dy /= L;
+  return { x1: a.x - dx * EXT, y1: a.y - dy * EXT, x2: b.x + dx * EXT, y2: b.y + dy * EXT };
+}
+
 export function analyzePlane(frames: Frame[], path: ClubPoint[], phases: Phases): PlaneAnalysis | null {
   const addr = nearestFrame(frames, phases.address);
-  if (!addr) return null;
-  const grip: PlanePoint = {
-    x: (addr[L_WRIST].x + addr[R_WRIST].x) / 2,
-    y: (addr[L_WRIST].y + addr[R_WRIST].y) / 2,
-  };
-  // The plane needs a clubhead anchor at (or near) address; without a club trace
-  // there's nothing to draw the stick from.
-  const headPt = nearestTracked(path, phases.address, 8) ?? nearestTracked(path, phases.top, 12);
-  if (!headPt) return null;
-  const head: PlanePoint = { x: headPt.x, y: headPt.y };
+  const topF = nearestFrame(frames, phases.top);
+  if (!addr || !topF) return null;
 
+  // Both ends of the shaft need a clubhead anchor (pose gives us the hands/grip).
+  const ballPt = nearestTracked(path, phases.address, 8);
+  const headTop = nearestTracked(path, phases.top, 12);
+  if (!ballPt || !headTop) return null;
+
+  const ball: Pt = { x: ballPt.x, y: ballPt.y };
+  const Ct: Pt = { x: headTop.x, y: headTop.y };
+  const gripA = gripOf(addr);
+  const gripT = gripOf(topF);
   const scale = bodyHeight(addr);
-  let dx = grip.x - head.x,
-    dy = grip.y - head.y;
-  const len = Math.hypot(dx, dy) || 1e-6;
-  dx /= len;
-  dy /= len;
-  const line: PlaneLine = {
-    x1: head.x - dx * EXT,
-    y1: head.y - dy * EXT,
-    x2: grip.x + dx * EXT,
-    y2: grip.y + dy * EXT,
-  };
 
-  // Signed perpendicular distance of a point from the plane line (unit dir ⇒ |·| = distance).
-  const cross = (px: number, py: number) => dx * (py - head.y) - dy * (px - head.x);
-  // Calibrate the sign so the body (hips) is the "under/inside" side, hence
-  // the opposite side reads positive = over-the-top / above the plane.
-  const hipX = (addr[L_HIP].x + addr[R_HIP].x) / 2,
-    hipY = (addr[L_HIP].y + addr[R_HIP].y) / 2;
-  const bodySign = Math.sign(cross(hipX, hipY)) || 1;
+  const idealLine = extend(ball, gripA); // ball → hands@address — the plane the shaft should lie on
+  const topShaft = extend(Ct, gripT); // clubhead@top → hands@top, extended through the butt
 
-  const devs: number[] = [];
-  for (let i = phases.top; i <= phases.impact; i++) {
-    const p = path[i];
-    if (p && p.conf > 0.05) devs.push((-bodySign * cross(p.x, p.y)) / scale * 100);
-  }
-  if (devs.length < 2)
-    return { ok: false, reason: "club trace too thin on the downswing", grip, head, line, devPct: NaN, maxDevPct: NaN, verdict: "na" };
+  // How far is the clubhead at the top OFF the ideal plane line? Signed
+  // perpendicular distance, normalized by body height. The ideal plane (ball →
+  // hands@address) is a real line, so this is well-defined regardless of where the
+  // body sits — and it's exactly the "is the club on plane at the top" read: when
+  // the clubhead (and grip) sit on the line, the shaft IS the plane and the butt
+  // points back at the ball. + = outside the plane (toward the ball/camera side,
+  // the steep / over-the-top side), − = inside (laid off / shallow).
+  let px = gripA.x - ball.x,
+    py = gripA.y - ball.y;
+  const pl = Math.hypot(px, py) || 1e-6;
+  px /= pl;
+  py /= pl;
+  const sideOf = (q: Pt) => px * (q.y - ball.y) - py * (q.x - ball.x);
+  const gapPct = (sideOf(Ct) / scale) * 100;
 
-  const devPct = devs.reduce((s, v) => s + v, 0) / devs.length;
-  const maxDevPct = devs.reduce((m, v) => (Math.abs(v) > Math.abs(m) ? v : m), 0);
-  const verdict: PlaneVerdict = devPct > PLANE_DEV_THRESH ? "above" : devPct < -PLANE_DEV_THRESH ? "below" : "on";
-  return { ok: true, grip, head, line, devPct, maxDevPct, verdict };
+  const verdict: PlaneVerdict =
+    Math.abs(gapPct) < PLANE_ON_THRESH ? "on" : gapPct > 0 ? "out" : "in";
+
+  return { ok: true, ball, idealLine, topShaft, gapPct, verdict };
 }

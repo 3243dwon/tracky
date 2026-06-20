@@ -225,6 +225,8 @@ header.app p { color: var(--muted); font-size: 13.5px; margin: 10px 0 0; }
   border: 2px solid #06090b; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer;
 }
 .clublegend .sw.white { background: #fff; }
+.clublegend .sw.green { background: #78e696; }
+.clublegend .sw.purple { background: #be5aff; }
 
 /* a11y: keyboard users need a visible focus ring on controls that strip the
    native outline (the height slide, sort chips, scrub, etc.) */
