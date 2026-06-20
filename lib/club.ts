@@ -311,9 +311,11 @@ export function analyzeClubPath(path: ClubPoint[], frames: Frame[], phases: Phas
 export function clubFault(m: ClubAnalysis): Fault | null {
   if (!Number.isNaN(m.loopPct) && m.loopPct > 6 && m.coveragePct > 45 && m.quality > 0.4) {
     return {
-      title: "Over-the-top transition (out-to-in path)",
-      mishit: "the classic slice (and pull) — the clubhead is thrown out and comes down across the ball",
-      detail: `downswing arc ~${m.loopPct.toFixed(0)}% of body height wider than the backswing at matched height`,
+      title: "Over-the-top transition (out-to-in path) · 出杆过顶（外到内轨迹）",
+      mishit:
+        "the clubhead is starting down outside the ball and cutting across it — that out-to-in path is the engine behind the slice (and the pull). Path is only half the story, though: one camera can't read your face angle, so it can't tell a slice from a pull. 杆头从球的外侧开始下来、再横切过球——这条外到内的路径正是右曲球（和拉球）的根源。但路径只是一半：单摄像头读不到杆面角度，所以分不清右曲和拉球。",
+      detail: `downswing arc ~${m.loopPct.toFixed(0)}% of body height wider than the backswing at matched height — you want the magenta downswing tucking INSIDE the cyan backswing · 下杆弧线在同高度比上杆宽约 ${m.loopPct.toFixed(0)}%（占身高）——理想是洋红下杆线收到青色上杆线的内侧`,
+      fix: "Tour players deliver from the INSIDE — they shallow the club in transition instead of throwing it out over the top. Set a headcover or towel just outside the ball and miss it coming down — feel the club drop behind you and swing out to the right (right-hander). Groove it slow, then keep the feel at speed. Re-film; the magenta downswing arc should tuck inside the cyan backswing. 巡回赛球手都是从内侧交付——他们在转换时让杆变平（shallow），而不是把杆甩到外侧、过顶。在球外侧放杆头套或毛巾，下杆避开它——感受杆子掉到身后、向右（右手球手）打出去。先慢动作打进去，再带速度保持这个感觉。重拍：洋红下杆弧线应收到青色上杆线的内侧。",
       focus: "slice / swing path",
     };
   }

@@ -67,13 +67,13 @@ export default function SpeedChart({
     <div ref={ref}>
       <div className="statrow">
         <div className="stat">
-          <div className="k">Peak hand speed</div>
+          <div className="k">Peak hand speed 手部峰值速度</div>
           <div className="v num">
             ~{peakMph.toFixed(0)} <small>mph</small>
           </div>
         </div>
         <div className="stat">
-          <div className="k">At impact</div>
+          <div className="k">At impact 触球瞬间</div>
           <div className="v num">
             ~{impactMph.toFixed(0)} <small>mph</small>
           </div>
@@ -133,6 +133,9 @@ export default function SpeedChart({
         Hands ≠ clubhead: the shaft&apos;s lever multiplies hand speed several-fold, and measuring the club needs club
         tracking or a launch monitor. What this number is good for: comparing <b>your own swings</b> to each other —
         speeds scale from your height, so they&apos;re ~estimates, but consistent ones.
+        <br />
+        手 ≠ 杆头：杆身的杠杆会把手速放大好几倍，要测杆头得用杆头追踪或弹道测量仪。这个数字真正有用的地方：拿
+        <b>你自己的不同挥杆</b>互相比较——速度是按你的身高换算的，所以是「估算值」，但彼此之间是一致可比的。
       </p>
     </div>
   );

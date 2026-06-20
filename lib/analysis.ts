@@ -31,7 +31,7 @@ export type Metrics = {
   secondaryTiltDeg: number;
 };
 
-export type Fault = { title: string; mishit: string; detail: string; focus: string };
+export type Fault = { title: string; mishit: string; detail: string; fix: string; focus: string };
 
 // Hand (mid-wrist) speed over the swing, in body-heights per second.
 // Multiply by (standing height in m × 0.89) for m/s — nose-to-ankle ≈ 0.89 × stature.
@@ -58,7 +58,7 @@ export type SequenceAnalysis = {
 
 export type XFactor = { topDeg: number; peakDeg: number; peakT: number; stretchPct: number };
 
-export type Quality = { ok: boolean; reason?: string };
+export type Quality = { ok: boolean; reason?: string; confidence?: "high" | "low" };
 
 export type Analysis = {
   phases: Phases;
@@ -216,25 +216,37 @@ export function computeMetrics(frames: Frame[], phases: Phases, fps: number): Me
 
 export function flagFaults(m: Metrics): Fault[] {
   const f: Fault[] = [];
-  if (m.headSwayPct > 15 || Math.abs(m.hipSwayBackPct) > 18)
+  // Hip sway is only meaningful face-on (it's a target-line metric); on a down-the-line
+  // clip the horizontal number is noise, so the hip arm of this fault is gated to face-on
+  // — head vertical/lateral travel still fires from any view.
+  if (m.headSwayPct > 15 || (m.view === "face-on" && Math.abs(m.hipSwayBackPct) > 18))
     f.push({
-      title: "Excess lateral sway",
-      mishit: "fat & thin shots — the low point wanders, so strike is hit-or-miss",
-      detail: `head ${m.headSwayPct.toFixed(0)}% / hip ${sign(m.hipSwayBackPct)}% of body height`,
+      title: "Excess lateral sway · 横向晃动过大",
+      mishit:
+        "the swing's low point is sliding with you, so the club bottoms out in a different spot every time — that's the fat/thin pattern, and ball-striking is the single thing that most separates handicaps (Shot Scope: greens-in-reg fall from 61% at scratch to ~10% by 25-handicap). 挥杆的最低点跟着你一起平移，每次触地点都不一样——这就是打肥/打薄，而触球质量正是最能拉开差点的因素（Shot Scope：标准杆上果岭率从 scratch 的 61% 一路掉到 25 差点的约 10%）。",
+      detail:
+        m.view === "face-on"
+          ? `head ${m.headSwayPct.toFixed(0)}% / hip ${sign(m.hipSwayBackPct)}% of body height — steady ball-strikers hold both under ~10% · 头 ${m.headSwayPct.toFixed(0)}% / 髋 ${sign(m.hipSwayBackPct)}%（占身高），触球稳定的球手两者都在约 10% 以内`
+          : `head ${m.headSwayPct.toFixed(0)}% of body height — steady ball-strikers hold it under ~10% · 头 ${m.headSwayPct.toFixed(0)}%（占身高），触球稳定的球手控制在约 10% 以内`,
+      fix: "Rotate around a stable centre instead of sliding off the ball — the hips can turn hard while the head stays over it, the way Rory McIlroy's does. Drill the feel: stand an alignment stick (or a chair) just outside your trail hip and swing without touching it. Re-film; head-sway under ~10% means it's holding. 绕着一个稳定中心旋转，别整个滑出球外——髋可以转得很猛，同时头一直留在球上方，像罗里·麦克罗伊那样。练这个感觉：在后侧髋外侧立一根定位杆（或一把椅子），挥杆时别碰到它。重拍——头部横向晃动压到约 10% 以内就说明稳住了。",
       focus: "strike consistency",
     });
   if (m.headVertPct > 12)
     f.push({
-      title: "Head lifts or dips through the swing",
-      mishit: "topped and thin shots — the killers off the tee and fairway",
-      detail: `${m.headVertPct.toFixed(0)}% of body height vertically`,
+      title: "Head lifts or dips through the swing · 挥杆中头部上下起伏",
+      mishit:
+        "your head is the centre of the swing's radius — when it climbs or drops, the bottom of the arc moves with it, which is precisely how you top one ball and catch the next one thin. 头是挥杆半径的圆心——它一上一下，弧线的最低点就跟着移动，你这一球打顶、下一球打薄，正是这么来的。",
+      detail: `${m.headVertPct.toFixed(0)}% of body height vertically — under ~8% and the strike steadies · 垂直方向占身高 ${m.headVertPct.toFixed(0)}%，压到约 8% 以内触球就稳了`,
+      fix: "Keep your spine angle and turn through the ball rather than standing up to 'help' it into the air — that's the steady-head look you see in Tiger Woods. Stay in your posture and feel your chest height hold until the ball's gone. Re-film; aim for under ~8%. 保持脊柱角度、转身穿过球，而不是站起来「帮」球起飞——这就是你在老虎·伍兹身上看到的那种稳定头部。保持体态，感觉胸口高度一直稳住，直到球飞走。重拍，目标控制在约 8% 以内。",
       focus: "strike consistency",
     });
   if (!Number.isNaN(m.tempoRatio) && m.tempoRatio < 1.8)
     f.push({
-      title: "Rushed transition",
-      mishit: "loss of sequence → inconsistent contact and direction",
-      detail: `tempo ${m.tempoRatio.toFixed(1)}:1 (smooth is ~3:1)`,
+      title: "Rushed transition · 过渡太急（抢节奏）",
+      mishit:
+        "you're starting down before the backswing finishes, so the pelvis → torso → hands chain never stacks up — and that last link is where the clubhead nearly doubles its speed. Rush it and you leak both speed and a square face. 上杆还没到顶你就开始下杆，骨盆 → 躯干 → 手的发力链没叠起来——而正是最后这一环，杆头速度几乎翻倍。抢这一下，速度和正杆面都会漏掉。",
+      detail: `tempo ${m.tempoRatio.toFixed(1)}:1 — tour rhythm sits near 3:1 back-to-through, almost regardless of the player · 节奏 ${m.tempoRatio.toFixed(1)}:1，巡回赛的上杆:下杆几乎人人都在 3:1 附近`,
+      fix: "Let the sequence build the speed rather than hitting hard from the top — an unhurried transition, like Rory McIlroy's, lets the pelvis → torso → hands chain load in order. Count '1-2' going back, '1' coming down (~3:1), and pause a hair at the top before you start down. Re-film; tempo drifting toward 3:1 with crisper contact. 让发力顺序去产生速度，而不是从顶点猛抽一下——像罗里·麦克罗伊那样不慌不忙的转换，能让骨盆 → 躯干 → 手依次蓄力。上杆数「1-2」、下杆数「1」（约 3:1），到顶点稍停一丁点再下杆。重拍，节奏往 3:1 靠、触球更扎实。",
       focus: "tempo",
     });
   return f;
@@ -244,11 +256,11 @@ export function watchNotes(m: Metrics): string[] {
   const notes: string[] = [];
   if (Math.abs(m.secondaryTiltDeg) > 15)
     notes.push(
-      `Spine angle changes ${sign(m.secondaryTiltDeg)}° from address to impact — if you filmed down-the-line, a big stand-up can mean early extension (thins/shanks). Confirm with a clean DTL clip.`
+      `Spine angle changes ${sign(m.secondaryTiltDeg)}° from address to impact — if you filmed down-the-line, a big stand-up can mean early extension (thins/shanks). Confirm with a clean DTL clip. · 脊柱角度从瞄球到触球变化了 ${sign(m.secondaryTiltDeg)}°——若是后方视角（DTL）拍摄，明显起身可能是提前伸展（early extension，易打薄/打 shank），建议用一段清晰的后方视角再确认。`
     );
   if (m.reverseSpineDeg > 10)
     notes.push(
-      `Upper body may lean toward the target at the top (~${m.reverseSpineDeg.toFixed(0)}°) — possible reverse pivot; confirm on a DTL clip.`
+      `Upper body may lean toward the target at the top (~${m.reverseSpineDeg.toFixed(0)}°) — possible reverse pivot; confirm on a DTL clip. · 上杆顶点时上半身可能倒向目标方向（约 ${m.reverseSpineDeg.toFixed(0)}°），可能是反向重心转移（reverse pivot），用后方视角确认一下。`
     );
   return notes;
 }
@@ -406,11 +418,21 @@ export function swingQuality(frames: Frame[], phases: Phases, fps: number): Qual
   const span = Math.max(1, phases.finish - phases.address + 1);
   let det = 0;
   for (let i = phases.address; i <= phases.finish; i++) if (frames[i]) det++;
-  if (det / span < 0.4) return { ok: false, reason: "body tracking too patchy" };
+  // Loosened from 0.4: a small/occluded golfer at a range legitimately drops below
+  // 40% detected frames; detectPhases already interpolates gaps and the derived
+  // analyses (speed/sequence) suppress garbage via their own validity checks.
+  if (det / span < 0.3) return { ok: false, reason: "body tracking too patchy" };
   const back = (phases.top - phases.address) / fps;
   const down = (phases.impact - phases.top) / fps;
-  if (back < 0.25 || back > 3.5) return { ok: false, reason: "no clear backswing" };
-  if (down < 0.06 || down > 1.3) return { ok: false, reason: "no clear downswing" };
+  // Backswing ceiling raised to 6s so a slow-mo (120/240fps) clip — where the whole
+  // swing plays back stretched — isn't rejected. The downswing ceiling is RELATIVE
+  // (a real downswing is quicker than the backswing) so it's slow-mo-invariant, but
+  // ABSOLUTELY CAPPED at 3s: a mislocated 'top' inflates `back`, and without the cap that
+  // would loosen this gate onto the exact non-swing it should reject. The real backstop for
+  // a low-energy non-swing is the hand-rise check below, not this clause.
+  if (back < 0.25 || back > 6.0) return { ok: false, reason: "no clear backswing" };
+  if (down < 0.06 || down > Math.min(3.0, Math.max(1.3, back * 0.95)))
+    return { ok: false, reason: "no clear downswing" };
   const hy = new Array<number>(n).fill(NaN);
   for (let i = 0; i < n; i++) {
     const f = frames[i];
@@ -418,9 +440,18 @@ export function swingQuality(frames: Frame[], phases: Phases, fps: number): Qual
   }
   const sig = smooth(interpNaN(hy), 5);
   const scale = bodyHeight(nearest(frames, phases.address));
-  if ((sig[phases.address] - sig[phases.top]) / scale < 0.22)
-    return { ok: false, reason: "hands never rose like a swing" };
-  return { ok: true };
+  // Loosened from 0.22: down-the-line wrist occlusion + the 5-wide smoother + NaN
+  // interpolation systematically under-measure the top-of-backswing rise. 0.16 of
+  // body height is still a clearly upward hand path a stationary person can't fake.
+  const rise = (sig[phases.address] - sig[phases.top]) / scale;
+  if (rise < 0.16) return { ok: false, reason: "hands never rose like a swing" };
+  // Confidence: require clean tracking, a clear rise, and real swing tempo — backswing
+  // distinctly longer than downswing (~2-3:1). That ratio test is scale-invariant (slow-mo
+  // still reads high) and, unlike `down < back`, isn't auto-satisfied when a mislocated top
+  // balloons `back`: a down≈back motion (waggle / walk-up / bad top) reads LOW even when both
+  // times are large. Low-confidence makes the UI hedge and drop the prescriptive drills.
+  const confidence: "high" | "low" = det / span >= 0.4 && rise >= 0.22 && back > down * 1.5 ? "high" : "low";
+  return { ok: true, confidence };
 }
 
 export function analyzeSwing(frames: Frame[], fps: number, times?: number[]): Analysis {

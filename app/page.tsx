@@ -6,6 +6,8 @@ import {
   createLandmarker,
   extractLandmarks,
   scanForSwings,
+  chunkWindows,
+  motionVaried,
   captureFrame,
   type Extraction,
   type SwingWindow,
@@ -222,19 +224,28 @@ export default function Page() {
       urlsRef.current = [];
 
       setStage("model");
-      setBusy("Loading the pose model (first time only)…");
-      if (!landmarkerRef.current) landmarkerRef.current = await createLandmarker();
+      setPct(0);
+      setBusy("Downloading the pose model — first time only (~10 MB), instant after.");
+      if (!landmarkerRef.current) landmarkerRef.current = await createLandmarker(setPct);
       const lm = landmarkerRef.current;
 
       const video = procRef.current!;
       const results: SwingResult[] = [];
       const skips: string[] = [];
+      const decodeFailedFiles: string[] = []; // files whose frames never decoded (likely HEVC)
 
       for (const file of files) {
         if (results.length >= 10) {
           skips.push(`stopped at 10 swings — ${file.name} not analyzed`);
           break;
         }
+        // Per-file decode/coverage tracking: a clip is only flagged as a dead decode
+        // if we never saw a trackable human AND the frames never changed — that tells
+        // an HEVC/codec failure apart from a clip that decoded fine but had no swing.
+        let fileHadPose = false;
+        let fileHadMotion = false;
+        let fileProduced = false;
+        const acceptedImpacts: number[] = []; // absolute impact times kept (fallback de-dupe)
         const url = URL.createObjectURL(file);
         urlsRef.current.push(url);
         video.src = url;
@@ -246,7 +257,10 @@ export default function Page() {
         });
 
         let windows: SwingWindow[];
-        if (video.duration <= 8.5) {
+        // Short clips skip the cheap scanner entirely and go straight to the reliable
+        // pose pass (11s ≈ 20fps at the 220-frame budget — plenty for tempo/phases).
+        let fallbackMode = false;
+        if (video.duration <= 11) {
           windows = [{ start: 0, end: video.duration }];
         } else {
           setStage("scanning");
@@ -254,8 +268,22 @@ export default function Page() {
           setBusy(`Scanning ${file.name} for swings…`);
           const scan = await scanForSwings(video, setPct);
           windows = scan.windows;
+          fallbackMode = scan.fellBack;
+          // Safety net: a long clip is NEVER rejected just because the cheap motion
+          // pre-filter found nothing. scanForSwings already degrades to whole-clip
+          // chunks, but guard here too so this path can't regress if that contract
+          // changes — the dense pose pass + swingQuality (lib/analysis.ts) gate out
+          // non-swings, so coarse fallback windows can't surface a false swing.
+          if (!windows.length) {
+            windows = chunkWindows(video.duration);
+            fallbackMode = true;
+          }
           if (scan.truncated) skips.push(`${file.name}: only the first ${Math.round(scan.scannedS / 60)} min scanned`);
-          if (!windows.length) skips.push(`${file.name}: no swing-like motion found`);
+          if (fallbackMode)
+            skips.push(
+              `${file.name}: motion scan inconclusive — deep-checking the clip` +
+                (video.duration > 54 ? " (first ~54s)" : "")
+            );
         }
 
         for (const win of windows) {
@@ -265,9 +293,20 @@ export default function Page() {
           setBusy(`Swing ${results.length + 1} — tracking your body…`);
           try {
             const extraction = await extractLandmarks(video, lm, setPct, { window: win, scrubWidth: 480, motionWidth: 160 });
+            if (extraction.frames.some(Boolean)) fileHadPose = true;
+            if (motionVaried(extraction.motion)) fileHadMotion = true;
             const analysis = analyzeSwing(extraction.frames, extraction.fps, extraction.times);
             if (!analysis.quality.ok) {
               skips.push(`${fmtT(win.start)} in ${file.name}: ${analysis.quality.reason}`);
+              continue;
+            }
+            // In fallback mode the windows are overlapping whole-clip chunks, so one
+            // real swing can surface from two adjacent chunks — drop the duplicate by
+            // impact-time proximity, but KEEP genuinely distinct swings (a multi-swing
+            // range session must not collapse to one). Real scans (fellBack=false) keep
+            // every window untouched.
+            if (fallbackMode && acceptedImpacts.some((t) => Math.abs(t - analysis.times.impact) < 1.5)) {
+              extraction.motion = null;
               continue;
             }
             // Clubhead arc (v3.5) from the motion frames, then free that buffer.
@@ -287,13 +326,30 @@ export default function Page() {
               stills.push({ name, time, url: tmp.toDataURL("image/jpeg", 0.85) });
             }
             results.push({ id: crypto.randomUUID(), src: url, fileName: file.name, win, extraction, analysis, club, stills });
+            acceptedImpacts.push(analysis.times.impact);
+            fileProduced = true;
           } catch (err) {
             skips.push(`${fmtT(win.start)} in ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
+
+        // No swing AND we never saw a human or any frame-to-frame change ⇒ the browser
+        // didn't actually decode this clip (e.g. HEVC). Flag it so the user gets the
+        // codec fix, not a misleading "no swing found". (Covers short clips too, which
+        // skip the scanner.) A clip with a visible person standing still has poses, so
+        // it won't be mislabelled here.
+        if (!fileProduced && !fileHadPose && !fileHadMotion) decodeFailedFiles.push(file.name);
       }
 
       if (!results.length) {
+        if (decodeFailedFiles.length) {
+          const which = decodeFailedFiles.length === 1 ? decodeFailedFiles[0] : `${decodeFailedFiles.length} clips`;
+          throw new Error(
+            `This didn't decode in your browser (${which} — the frames came through blank). ` +
+              "On iPhone: Settings → Camera → Formats → Most Compatible, then refilm — " +
+              "or convert the clip to H.264/MP4 and try again."
+          );
+        }
         throw new Error(
           "No analyzable swing found. " +
             (skips.length ? `(${skips.join("; ")}) ` : "") +
@@ -433,6 +489,9 @@ export default function Page() {
   // Body faults (pose) + the clubhead fault (motion), shown as one list.
   const allFaults = cur ? [...cur.analysis.faults, ...(club?.fault ? [club.fault] : [])] : [];
   const topFault = allFaults[0];
+  // A window that only squeaked past the loosened quality gate — hedge the read and
+  // drop the prescriptive drills/plan so a marginal track can't pose as a confident diagnosis.
+  const lowConf = cur?.analysis.quality.confidence === "low";
   const idle = stage === "idle" || stage === "done" || stage === "error";
   const showMain = overlay === "none";
 
@@ -472,7 +531,7 @@ export default function Page() {
         </button>
       </header>
 
-      <video ref={procRef} className="hidden" playsInline muted />
+      <video ref={procRef} className="procvid" playsInline muted preload="auto" />
       <input ref={fileRef} type="file" accept="video/*" multiple hidden onChange={onInput} />
 
       {toast && <div className="toast">{toast}</div>}
@@ -500,6 +559,18 @@ export default function Page() {
             <br />
             <b>Several clips or one long range video both work</b> — each swing is found and analyzed separately.
           </p>
+          {stage === "idle" && (
+            <button
+              className="chip"
+              style={{ marginTop: 4 }}
+              onClick={(e) => {
+                e.stopPropagation();
+                loadDemo();
+              }}
+            >
+              ▶ See a demo first 先看个示例
+            </button>
+          )}
         </div>
       )}
 
@@ -624,9 +695,9 @@ export default function Page() {
       {showMain && (stage === "model" || stage === "scanning" || stage === "processing") && (
         <div className="card status">
           <div className="spinner" />
-          {stage !== "model" && <div className="pct num">{pct}%</div>}
+          {pct > 0 && <div className="pct num">{pct}%</div>}
           <div className="label">{busy}</div>
-          {stage !== "model" && (
+          {pct > 0 && (
             <div className="bar">
               <div style={{ width: `${pct}%` }} />
             </div>
@@ -636,6 +707,24 @@ export default function Page() {
 
       {showMain && stage === "done" && cur && m && (
         <div className="results">
+          {lowConf && (
+            <div
+              className="card"
+              style={{ borderColor: "rgba(255,176,86,0.5)", background: "rgba(255,176,86,0.06)" }}
+            >
+              <div className="label" style={{ color: "#ffb056" }}>
+                ⚠ Low-confidence track · 低可信度
+              </div>
+              <p className="note" style={{ margin: "6px 0 0" }}>
+                The camera didn&apos;t get a clean enough swing to be sure — tracking was patchy or the hand path was
+                faint. Treat the numbers below as rough, and re-film with your <b>full body in frame</b>, a steady
+                phone, face-on or down-the-line for a real read. (Drills are held back until the read is clean.)
+                <br />
+                镜头没拍到足够干净的挥杆，无法确定——可能是追踪不稳，或手部轨迹太弱。下面的数字请当作粗略参考，
+                建议<b>全身入镜</b>、手机稳定、正面或后方视角重拍一次，才能得到可靠结果。（读数干净前，先不给具体练习。）
+              </p>
+            </div>
+          )}
           {swings.length > 1 && (
             <div className="swchips">
               {swings.map((s, i) => (
@@ -692,7 +781,7 @@ export default function Page() {
 
           {cur.analysis.speed && (
             <Reveal>
-              <div className="section-title">Hand speed</div>
+              <div className="section-title">Hand speed 手部速度</div>
               <div className="card">
                 <SpeedChart analysis={cur.analysis} heightCm={heightCm} onHeightCm={setHeightCm} />
               </div>
@@ -701,7 +790,7 @@ export default function Page() {
 
           {cur.analysis.sequence && (
             <Reveal>
-              <div className="section-title">Kinematic sequence · experimental</div>
+              <div className="section-title">Kinematic sequence 动力链顺序 · experimental</div>
               <div className="card">
                 <SequenceCard analysis={cur.analysis} />
               </div>
@@ -710,7 +799,7 @@ export default function Page() {
 
           {club && club.coveragePct > 0 && (
             <Reveal>
-              <div className="section-title">Clubhead path · experimental</div>
+              <div className="section-title">Clubhead path 杆头轨迹 · experimental</div>
               <div className="card">
                 <ClubCard
                   club={club}
@@ -724,33 +813,42 @@ export default function Page() {
           )}
 
           <Reveal>
-            <div className="section-title">Reliable metrics</div>
+            <div className="section-title">Reliable metrics 可靠的数据</div>
+            <p className="note" style={{ marginTop: -2 }}>
+              Read these as <b>repeatability markers</b>, not a report card — the skill signal in the research is how
+              tightly your <b>own</b> numbers repeat (r = 0.801), not how close they sit to a model swing. There&apos;s
+              no one perfect swing to chase: <b>Scottie Scheffler</b> has footwork most coaches would &ldquo;fix,&rdquo;
+              yet delivers the club cleanly — it&apos;s the delivery that counts, not the cosmetics.
+              这些请当作<b>可重复性</b>的标尺，不是成绩单——研究里的水平信号是你<b>自己</b>的数字重复得有多紧
+              （r = 0.801），而不是离某个标准挥杆有多近。没有一个完美挥杆值得你去照搬：<b>斯科蒂·舍夫勒</b>的脚步是
+              多数教练想「修正」的，但他的球杆交付依然干净——真正算数的是交付，不是外形。
+            </p>
             <div className="metrics">
               <div className="metric">
-                <div className="k">Tempo</div>
+                <div className="k">Tempo 节奏</div>
                 <div className="v num">
                   {Number.isNaN(m.tempoRatio) ? "—" : <CountUp value={m.tempoRatio} decimals={1} />}{" "}
-                  <small>: 1 · smooth ≈ 3:1</small>
+                  <small>: 1 · smooth ≈ 3:1（流畅约 3:1）</small>
                 </div>
               </div>
               <div className="metric">
-                <div className="k">Camera (auto)</div>
+                <div className="k">Camera (auto) 拍摄视角</div>
                 <div className="v" style={{ fontSize: 16 }}>
                   {m.view}
                 </div>
               </div>
               <div className="metric">
-                <div className="k">Head sway (lateral)</div>
+                <div className="k">Head sway (lateral) 头部横向晃动</div>
                 <div className="v num">
                   <CountUp value={m.headSwayPct} />
-                  <small>% of height</small>
+                  <small>% of height（占身高）</small>
                 </div>
               </div>
               <div className="metric">
-                <div className="k">Head move (vertical)</div>
+                <div className="k">Head move (vertical) 头部上下移动</div>
                 <div className="v num">
                   <CountUp value={m.headVertPct} />
-                  <small>% of height</small>
+                  <small>% of height（占身高）</small>
                 </div>
               </div>
             </div>
@@ -759,27 +857,43 @@ export default function Page() {
             Backswing {m.backswingS.toFixed(2)}s · downswing {m.downswingS.toFixed(2)}s · pose tracked in{" "}
             {cur.analysis.detectedPct.toFixed(0)}% of frames. Rough (view-sensitive): spine tilt{" "}
             {m.spineAddrDeg.toFixed(0)}° → {m.spineTopDeg.toFixed(0)}° → {m.spineImpactDeg.toFixed(0)}°.
+            <br />
+            上杆 {m.backswingS.toFixed(2)}s · 下杆 {m.downswingS.toFixed(2)}s · 在 {cur.analysis.detectedPct.toFixed(0)}%
+            的帧里追踪到了身体。脊柱角度（受视角影响，仅供参考）：{m.spineAddrDeg.toFixed(0)}° →{" "}
+            {m.spineTopDeg.toFixed(0)}° → {m.spineImpactDeg.toFixed(0)}°。
           </p>
 
           <Reveal>
-            <div className="section-title">Faults that actually cost strokes</div>
+            <div className="section-title">Faults that actually cost strokes 真正让你丢杆的问题</div>
             {allFaults.length > 0 ? (
-              allFaults.map((f) => (
+              <>
+                <p className="note" style={{ marginTop: -2 }}>
+                  Filtered to <b>destructive mishits</b>, not cosmetic positions — amateurs lose strokes to bad contact,
+                  not to an unpretty backswing. 只筛<b>破坏性失误</b>，不挑姿势好不好看——业余丢杆是因为触球差，不是因为
+                  上杆不漂亮。
+                </p>
+                {allFaults.map((f) => (
                 <div className="flag" key={f.title}>
                   <div className="icon">!</div>
                   <div className="body">
                     <div className="t">{f.title}</div>
-                    <div className="d">→ causes {f.mishit}</div>
+                    <div className="d">→ {f.mishit}</div>
                     <div className="d">{f.detail}</div>
+                    {f.fix && !lowConf && (
+                      <div className="d" style={{ marginTop: 6 }}>
+                        <b style={{ color: "#5fd36a" }}>Try this · 这样练：</b> {f.fix}
+                      </div>
+                    )}
                   </div>
                 </div>
-              ))
+                ))}
+              </>
             ) : (
               <div className="flag good">
                 <div className="icon">✓</div>
                 <div className="body">
-                  <div className="t">None the camera can see</div>
-                  <div className="d">Strike-wise, the swing looks sound.</div>
+                  <div className="t">None the camera can see 镜头能看到的问题：没有</div>
+                  <div className="d">Strike-wise, the swing looks sound. 就触球而言，这个挥杆看起来很扎实。</div>
                 </div>
               </div>
             )}
@@ -787,7 +901,7 @@ export default function Page() {
 
           {cur.analysis.notes.length > 0 && (
             <>
-              <div className="section-title">Worth checking (needs a clean down-the-line clip)</div>
+              <div className="section-title">Worth checking 值得留意（需要一段清晰的后方视角 DTL）</div>
               {cur.analysis.notes.map((n, i) => (
                 <p className="note" key={i}>
                   • {n}
@@ -796,42 +910,118 @@ export default function Page() {
             </>
           )}
 
-          {swings.length > 1 && (
-            <Reveal>
-              <div className="section-title">
-                Consistency across {swings.length} swings — the metric that actually tracks skill
-              </div>
-              <div className="card">
-                <ConsistencyCard analyses={swings.map((s) => s.analysis)} heightCm={heightCm} onSelect={setSel} />
-              </div>
-            </Reveal>
-          )}
+          {swings.length > 1 &&
+            (() => {
+              // Only clean (non-low-confidence) swings anchor the r=0.801 skill verdict —
+              // folding a shaky read into the mean/SD would contradict the hedge banner.
+              const reliable = swings.map((s, i) => ({ a: s.analysis, i })).filter((x) => x.a.quality.confidence !== "low");
+              const excluded = swings.length - reliable.length;
+              return (
+                <Reveal>
+                  <div className="section-title">
+                    Consistency across {reliable.length} swings 这 {reliable.length} 次挥杆的稳定性 — the metric that
+                    actually tracks skill（最能反映水平的指标）
+                  </div>
+                  <div className="card">
+                    {reliable.length > 1 ? (
+                      <>
+                        <ConsistencyCard
+                          analyses={reliable.map((x) => x.a)}
+                          heightCm={heightCm}
+                          onSelect={(j) => setSel(reliable[j].i)}
+                        />
+                        {excluded > 0 && (
+                          <p className="note">
+                            {excluded} low-confidence swing{excluded > 1 ? "s" : ""} left out of this spread. 已排除{" "}
+                            {excluded} 个低可信度挥杆。
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="note">
+                        Not enough clean swings yet — film 3+ good clips (full body, steady) for a meaningful
+                        consistency read. 干净的挥杆还不够——再拍 3 个以上清晰的（全身、稳定）才能算出有意义的稳定性。
+                      </p>
+                    )}
+                  </div>
+                </Reveal>
+              );
+            })()}
 
           <Reveal>
-          <div className="section-title">What to actually work on</div>
+          <div className="section-title">What to actually work on 接下来该练什么</div>
           <div className="card">
-            {topFault ? (
-              topFault.focus === "slice / swing path" ? (
-                <p className="reco">
-                  Priority: <b>{topFault.title}</b>. The clubhead is coming down across the ball. Groove an{" "}
-                  <b>in-to-out path</b> — set a headcover (or towel) just outside the ball and miss it on the way
-                  down, feeling the club drop behind you in transition. Re-film and watch the magenta downswing arc
-                  move <b>inside</b> the cyan backswing.
-                </p>
-              ) : (
-                <p className="reco">
-                  Your body is causing a destructive mishit. Priority: <b>{topFault.title}</b>. Build practice that
-                  fixes the <b>strike</b>, then re-film to confirm it transferred.
-                </p>
-              )
-            ) : (
+            {lowConf ? (
               <p className="reco">
-                Your swing&apos;s gross positions look fine — but that&apos;s not the same as &ldquo;no leak.&rdquo;
-                Where amateurs actually lose strokes (Broadie / strokes-gained): <b>~2/3 of the scoring gap is the long
-                game</b> outside 100 yds (approach most of all); only ~1/3 is inside 100, and putting is a small
-                differentiator even for amateurs. Body pose can&apos;t see strike quality or dispersion — the real
-                diagnosis needs ball-flight or on-course tracking. <b>Log a round, find your biggest leak.</b>
+                Re-film first. This track wasn&apos;t clean enough to prescribe practice against — a plan built on a
+                shaky read just wastes range time. Get one good clip (full body, steady, face-on or down-the-line) and
+                the drills come back automatically.
+                <br />
+                <br />
+                先重拍。这段追踪还不够干净，不足以据此安排练习——基于不可靠读数的计划只会浪费练习场时间。先拍一段干净的
+                （全身入镜、稳定、正面或后方视角），具体练习就会自动回来。
               </p>
+            ) : topFault ? (
+              <div className="reco">
+                <b>Your one priority: {topFault.title}.</b> One focus per session — spreading thin is the #1 reason
+                range time never shows up on the course. Your drill is in the card above; here&apos;s the ~20-minute
+                block that makes it <em>stick</em>:
+                <br />
+                <br />
+                • <b>Groove it — blocked, ~10 balls.</b> Same club, slow, until the new feel runs by itself. (Blocked
+                reps ingrain a feel fast — but stop there; they flatter you and fade.)
+                <br />
+                • <b>Make it stick — random, ~15 balls.</b> Keep the feel, but change club and target <em>every
+                ball</em>. It feels messier — that&apos;s the point: random practice is what survives the first tee.
+                <br />
+                • <b>Pressure test.</b> One target, one rule (e.g. 10 balls — count the clean strikes, or how many start
+                on line). Write the number down; that&apos;s your session score to beat next time.
+                <br />
+                • <b>Re-check.</b> Re-film one swing. The win is your flagged number dropping and contact firming up —
+                <em>not</em> a prettier-looking position (skill is repeating <b>your</b> motion, r = 0.801, not copying
+                a model).
+                <br />
+                <br />
+                <b>你的唯一重点：{topFault.title}。</b>一次只练一个——练得太散，是练习场的功夫上不了球场的头号原因。具体
+                动作在上面的卡片里；下面这个约 20 分钟的流程能让它<em>真正留住</em>：
+                <br />
+                • <b>打进去——分块，约 10 球。</b>同一支杆、放慢，直到新感觉能自动出来。（分块练习上手快——但到此为止，它
+                会让你自我感觉良好、然后很快消退。）
+                <br />
+                • <b>让它留住——随机，约 15 球。</b>保持感觉，但<em>每一球</em>都换杆、换目标。会觉得更乱——这正是关键：
+                随机练习才扛得住第一洞的紧张。
+                <br />
+                • <b>压力测试。</b>一个目标、一条规则（比如 10 球，数干净触球数、或有几球起飞方向对）。把数字记下来，就是
+                你下次要超越的成绩。
+                <br />
+                • <b>复查。</b>重拍一个挥杆。进步是你被标记的那个数字下降、触球变扎实——<em>不是</em>某个更好看的姿势
+                （水平是重复<b>你自己</b>的动作，r = 0.801，不是去贴模板）。
+              </div>
+            ) : (
+              <div className="reco">
+                <b>No destructive fault the camera can see — so make two concrete moves:</b>
+                <br />
+                <br />
+                • <b>Now, in this tool.</b> Film <b>3+ swings</b> and let the consistency panel surface your wobbliest
+                number — then tighten <em>that</em> one with random practice and re-film. Repeating your own motion
+                (r = 0.801) is the honest skill marker, not matching a model.
+                <br />
+                • <b>This week, on the course.</b> Log a round — <b>~2/3 of the amateur gap is the long game</b> outside
+                100 yds, <b>approach above all</b> — the highest-leverage place to spend practice — and it lives in
+                strike quality and dispersion this camera can&apos;t see. Find your biggest <em>on-course</em> leak,
+                then build a focused, science-based practice session around it — aimed at where the strokes actually
+                go, not where it&apos;s fun to bash balls.
+                <br />
+                <br />
+                <b>镜头看不到任何破坏性失误——那就做两个具体动作：</b>
+                <br />
+                • <b>现在，在这个工具里。</b>拍 <b>3 次以上挥杆</b>，让稳定性面板找出你波动最大的那个数字——然后用随机练习
+                把<em>那一个</em>练稳，再重拍。重复你自己的动作（r = 0.801）才是诚实的水平标尺，而不是贴模板。
+                <br />
+                • <b>这周，在球场上。</b>记录一轮——<b>业余约 2/3 的差距来自 100 码外的长杆</b>，<b>尤其是进攻杆</b>
+                ——练习回报最高的地方——而它藏在这个镜头看不到的触球质量和落点离散度里。找出你<em>下场时</em>最大的
+                漏洞，再围绕它安排一节有针对性、讲科学的练习——瞄准真正丢杆的地方，而不是哪儿打着爽就练哪儿。
+              </div>
             )}
           </div>
           </Reveal>
@@ -841,26 +1031,36 @@ export default function Page() {
           )}
 
           <details className="cantsee">
-            <summary>What this tool deliberately won&apos;t pretend to see</summary>
+            <summary>What this tool deliberately won&apos;t pretend to see 这个工具刻意不假装能看到的东西</summary>
             <ul>
               <li>
-                <b>Club face</b> — the other half of why a ball curves. The experimental clubhead tracer follows the
-                head&apos;s <b>path</b> from motion and can flag an over-the-top loop, but it <b>can&apos;t see the
+                <b>Club face 杆面</b> — the other half of why a ball curves. The experimental clubhead tracer follows
+                the head&apos;s <b>path</b> from motion and can flag an over-the-top loop, but it <b>can&apos;t see the
                 face angle</b> — so it can&apos;t separate a slice from a pull. That still takes a launch monitor.
+                <br />
+                杆面是球弯曲的另一半原因。实验性的杆头追踪只能从运动里看<b>轨迹</b>、标记过顶动作，但<b>看不到杆面角度
+                </b>，所以分不清右曲（slice）和拉球（pull）——这仍然需要弹道测量仪。
               </li>
               <li>
-                <b>True 3D angles</b> — depth here is a single-camera estimate. Rotation numbers are trends, not
-                protractor readings.
+                <b>True 3D angles 真正的三维角度</b> — depth here is a single-camera estimate. Rotation numbers are
+                trends, not protractor readings.
+                <br />
+                这里的深度是单摄像头估算，旋转数字只是趋势，不是量角器读数。
               </li>
               <li>
-                <b>Strike location &amp; ball flight</b> — the five impact factors that actually determine where the
-                ball goes live on the club face, not in your joints.
+                <b>Strike location &amp; ball flight 触球位置与球路</b> — the five impact factors that actually
+                determine where the ball goes live on the club face, not in your joints.
+                <br />
+                真正决定球往哪走的五个触球要素发生在杆面上，不在你的关节里。
               </li>
             </ul>
             <p>
               What 2D pose <b>is</b> validated for: key positions, tempo, head/hip motion, and — best of all —{" "}
               <b>how repeatable your own swing is</b> (the r = 0.801 finding used exactly this method). That&apos;s why
               the consistency panel exists.
+              <br />
+              二维姿态<b>真正</b>被验证有效的部分：关键位置、节奏、头/髋的移动，以及最重要的——<b>你自己挥杆的可重复性
+              </b>（r = 0.801 的研究用的正是这套方法）。这也是稳定性面板存在的原因。
             </p>
           </details>
 
@@ -869,6 +1069,9 @@ export default function Page() {
             stability and key positions; rotation/speed and the clubhead tracer are honest estimates; it{" "}
             <b>can&apos;t see the clubface</b>, so it flags an over-the-top path but can&apos;t separate a slice from a
             pull.
+            <br />
+            全程在你的设备上运行，不上传任何东西。二维单摄像头姿态：节奏、头部稳定性和关键位置可靠；旋转/速度和杆头
+            追踪是诚实的估算；它<b>看不到杆面</b>，所以能标记过顶轨迹，但无法区分右曲和拉球。
           </p>
           <p className="footer">Swing·CV · on-device pose via MediaPipe · no upload · no account</p>
         </div>

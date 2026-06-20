@@ -31,13 +31,13 @@ export default function ConsistencyCard({
   if (analyses.length < 2) return null;
 
   const rows: Row[] = [
-    { label: "Tempo", unit: ":1", digits: 1, get: (a) => a.metrics.tempoRatio },
-    { label: "Backswing", unit: "s", digits: 2, get: (a) => a.metrics.backswingS },
-    { label: "Downswing", unit: "s", digits: 2, get: (a) => a.metrics.downswingS },
-    { label: "Head sway", unit: "%", digits: 0, get: (a) => a.metrics.headSwayPct },
-    { label: "Head vertical", unit: "%", digits: 0, get: (a) => a.metrics.headVertPct },
-    { label: "Hip sway (back)", unit: "%", digits: 0, get: (a) => a.metrics.hipSwayBackPct },
-    { label: "Peak hand speed", unit: "mph", digits: 0, get: (a) => (a.speed ? bhToMph(a.speed.peak, heightCm) : NaN) },
+    { label: "Tempo 节奏", unit: ":1", digits: 1, get: (a) => a.metrics.tempoRatio },
+    { label: "Backswing 上杆", unit: "s", digits: 2, get: (a) => a.metrics.backswingS },
+    { label: "Downswing 下杆", unit: "s", digits: 2, get: (a) => a.metrics.downswingS },
+    { label: "Head sway 头部横向", unit: "%", digits: 0, get: (a) => a.metrics.headSwayPct },
+    { label: "Head vertical 头部上下", unit: "%", digits: 0, get: (a) => a.metrics.headVertPct },
+    { label: "Hip sway (back) 髋部后移", unit: "%", digits: 0, get: (a) => a.metrics.hipSwayBackPct },
+    { label: "Peak hand speed 手部峰值速度", unit: "mph", digits: 0, get: (a) => (a.speed ? bhToMph(a.speed.peak, heightCm) : NaN) },
   ];
 
   const table = rows
@@ -98,16 +98,29 @@ export default function ConsistencyCard({
             {(worst.cv * 100).toFixed(0)}%). The research is blunt here: skill correlates with how well you repeat{" "}
             <b>your own</b> motion (r = 0.801, measured with the same 2D pose method as this app) — not with matching
             any model swing. Tightening your most variable number is the highest-evidence thing this tool can point at.
+            <br />
+            <br />
+            在这 {analyses.length} 次挥杆里，<b>{worst.label.toLowerCase()}</b> 波动最大（±
+            {(worst.cv * 100).toFixed(0)}%）。研究讲得很直白：水平高低取决于你<b>重复自己</b>动作的能力（r = 0.801，
+            用的正是本应用这套二维姿态方法），而不是去贴合某个标准挥杆。把你波动最大的那个数字练稳，是这个工具能给出
+            的、证据最强的建议。
           </p>
         ) : (
           <p className="reco">
             Your swings repeat tightly across all of these numbers — that repeatability is exactly what separates
             skill levels in the research (r = 0.801). The remaining variation likely lives where this camera can&apos;t
             see: club delivery and strike.
+            <br />
+            <br />
+            你这几次挥杆在所有这些数字上都重复得很紧——这种可重复性正是研究里区分水平高低的关键（r = 0.801）。剩下的
+            波动多半藏在这个镜头看不到的地方：杆头的递送和触球。
           </p>
         )
       ) : (
-        <p className="note">Film at least 3 swings for a meaningful spread (SD) — two is just a difference.</p>
+        <p className="note">
+          Film at least 3 swings for a meaningful spread (SD) — two is just a difference. 至少拍 3 次挥杆才能算出有意义的
+          离散度（标准差）——只有两次的话就只是一个差值而已。
+        </p>
       )}
     </div>
   );

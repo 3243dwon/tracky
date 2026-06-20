@@ -342,6 +342,22 @@ header.app p { color: var(--muted); font-size: 13.5px; margin: 10px 0 0; }
 
 .hidden { display: none; }
 
+/* The processing <video> must be in the render tree and COMPOSITED (not display:none)
+   or iOS Safari / HEVC won't decode frames for drawImage + requestVideoFrameCallback —
+   the root cause of "stuck at 0%" and "no swing-like motion found". Keep it visually
+   gone (transparent, behind the page, non-interactive) but with real geometry so the
+   compositor actually presents frames. */
+.procvid {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 160px;
+  height: 284px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
 /* ---------- HUD chrome ---------- */
 .hudrow { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
 .hud { font-family: var(--font-m); font-size: 11px; letter-spacing: 0.14em; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }

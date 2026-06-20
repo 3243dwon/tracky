@@ -1,6 +1,6 @@
 // MediaPipe Pose Landmarker (web/WASM) loader + frame extraction + long-video scanning.
 // Everything runs client-side in the browser; the video never leaves the device.
-import type { Frame, LM } from "./analysis";
+import { NOSE, L_HIP, R_HIP, L_ANK, R_ANK, type Frame, type LM } from "./analysis";
 
 // Loaded dynamically so it never runs during SSR.
 type Landmarker = {
@@ -12,23 +12,108 @@ const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10/wasm";
 const MODEL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task";
 
-export async function createLandmarker(): Promise<Landmarker> {
+// numPoses: 2 so a single background person on a busy range doesn't crowd out the
+// golfer; pickGolfer() below selects the right body. Model is fetched with streaming
+// progress (a bare spinner on first load looks exactly like the "stuck at 0%" hang).
+export async function createLandmarker(onProgress?: (pct: number) => void): Promise<Landmarker> {
   const vision = await import("@mediapipe/tasks-vision");
   const fileset = await vision.FilesetResolver.forVisionTasks(WASM);
+  // Fetch the model ourselves so first load shows real % progress (a bare 0% spinner is
+  // indistinguishable from the "stuck at 0%" hang). Only the FETCH is in the try/catch —
+  // createFromOptions runs once below, so a GPU/init failure propagates instead of silently
+  // re-downloading 10MB. On a fetch/CORS failure we fall back to MediaPipe's own URL load.
+  let buf: Uint8Array | null = null;
+  try {
+    const resp = await fetch(MODEL);
+    if (!resp.ok || !resp.body) throw new Error("model fetch failed");
+    const total = Number(resp.headers.get("content-length")) || 0;
+    const reader = resp.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let loaded = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      loaded += value.length;
+      // With a Content-Length use it; without one, estimate against the ~10MB model so the
+      // bar still moves instead of sitting at 0 until the final snap to 100.
+      onProgress?.(
+        total > 0
+          ? Math.min(99, Math.round((loaded / total) * 100))
+          : Math.min(95, Math.round((loaded / 10_000_000) * 100))
+      );
+    }
+    const b = new Uint8Array(loaded);
+    let off = 0;
+    for (const c of chunks) {
+      b.set(c, off);
+      off += c.length;
+    }
+    buf = b;
+    onProgress?.(100);
+  } catch {
+    buf = null; // streaming fetch failed — fall back to a URL load below
+  }
   const lm = await vision.PoseLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: MODEL, delegate: "GPU" },
+    baseOptions: { ...(buf ? { modelAssetBuffer: buf } : { modelAssetPath: MODEL }), delegate: "GPU" },
     runningMode: "VIDEO",
-    numPoses: 1,
+    numPoses: 2,
   });
   return lm as unknown as Landmarker;
 }
 
+// With numPoses > 1 MediaPipe can also return a background person. Selecting per-frame by
+// size alone would FLICKER between two bodies (the golfer shrinks when they bend at address
+// or compress at the top), which would splice two people's hand paths into a fake swing.
+// So lock onto the same body across frames by nearest hip-centroid to the previous pick;
+// only seed/re-acquire with the largest-vertical-extent pose (the full-body golfer).
+function pickGolfer(poses: LM[][], prev: LM[] | null): LM[] {
+  if (poses.length <= 1) return poses[0];
+  const hipMid = (p: LM[]): [number, number] => [(p[L_HIP].x + p[R_HIP].x) / 2, (p[L_HIP].y + p[R_HIP].y) / 2];
+  if (prev) {
+    const [px, py] = hipMid(prev);
+    let best = poses[0];
+    let bestD = Infinity;
+    for (const p of poses) {
+      const [hx, hy] = hipMid(p);
+      const d = Math.hypot(hx - px, hy - py);
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    if (bestD < 0.2) return best; // same body as last frame (hips can't jump 0.2 between samples)
+  }
+  let best = poses[0];
+  let bestH = -1;
+  for (const p of poses) {
+    const ay = (p[L_ANK].y + p[R_ANK].y) / 2;
+    const h = Math.abs(ay - p[NOSE].y);
+    if (h > bestH) {
+      bestH = h;
+      best = p;
+    }
+  }
+  return best;
+}
+
+// Seek and resolve on the "seeked" event — but never hang. A single dropped
+// "seeked" (common on iOS Safari / HEVC, especially right after metadata load)
+// used to freeze the whole pipeline at 0%; the 1.5s timeout makes every await
+// self-healing (a frame sampled slightly early is still usable — drawImage just
+// reads whatever frame is currently presented; it never invents motion).
 function seekTo(video: HTMLVideoElement, t: number): Promise<void> {
   return new Promise((resolve) => {
-    const onSeeked = () => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(to);
       video.removeEventListener("seeked", onSeeked);
       resolve();
     };
+    const onSeeked = () => finish();
+    const to = setTimeout(finish, 1500);
     video.addEventListener("seeked", onSeeked);
     video.currentTime = Math.min(t, Math.max(0, video.duration - 0.001));
   });
@@ -84,6 +169,7 @@ export async function extractLandmarks(
   const times: number[] = [];
   const scrubs: ScrubFrame[] = [];
   let lastTs = epoch - 1;
+  let prevGolfer: LM[] | null = null; // last frame's chosen body — keeps pickGolfer locked to it
 
   // Downscaled stills captured along the way power the scroll-scrub hero —
   // no video seeking needed at scroll time.
@@ -120,7 +206,9 @@ export async function extractLandmarks(
     } catch {
       res = { landmarks: [] };
     }
-    frames.push(res.landmarks && res.landmarks.length ? res.landmarks[0] : null);
+    const golfer: Frame = res.landmarks && res.landmarks.length ? pickGolfer(res.landmarks, prevGolfer) : null;
+    if (golfer) prevGolfer = golfer;
+    frames.push(golfer);
     times.push(t);
     if (motionCtx && motion) {
       motionCtx.drawImage(video, 0, 0, motion.w, motion.h);
@@ -162,14 +250,66 @@ function median(a: number[]): number {
 }
 
 const SCAN_CAP_S = 180;
+const FALLBACK_CAP_S = 54;
+
+// Overlapping whole-clip windows for the dense pose fallback, used when the cheap
+// motion scan finds nothing (busy range, small subject, slow-mo, or a flaky
+// offscreen/HEVC decode). 10s windows stepped by 6s give a 4s overlap, so a real
+// (≲4s) swing straddling a boundary is still fully contained in the adjacent
+// window; bounded to 8 chunks / ~54s so a long clip can't explode the dense pass.
+// The pose-based swingQuality gate adjudicates each chunk, so this never invents a
+// swing — it just refuses to let the cheap scanner silently veto a clip the
+// reliable pose pass could analyze. The caller de-dupes overlapping same-swing hits
+// by impact time, so distinct swings in a long clip are each kept.
+export function chunkWindows(duration: number, capS = FALLBACK_CAP_S): SwingWindow[] {
+  const out: SwingWindow[] = [];
+  const end = Math.min(duration, capS);
+  for (let s = 0; s < end && out.length < 8; s += 6) {
+    out.push({ start: s, end: Math.min(end, s + 10) });
+  }
+  return out.length ? out : [{ start: 0, end: Math.min(duration, 10) }];
+}
+
+// Did the decoded frames actually change over time? A dead decode (black/frozen —
+// e.g. an iPhone HEVC clip the browser won't decode to canvas) yields a flat motion
+// stack. Used to tell an honest "this clip didn't decode" apart from "no swing here".
+export function motionVaried(motion: MotionStack | null): boolean {
+  if (!motion || motion.data.length < 2) return true; // can't tell ⇒ assume it decoded
+  const len = motion.w * motion.h;
+  const n = motion.data.length;
+  const stride = Math.max(1, Math.floor(n / 8));
+  let maxMean = 0;
+  for (let k = stride; k < n; k += stride) {
+    const a = motion.data[k - stride];
+    const b = motion.data[k];
+    let s = 0, c = 0;
+    for (let i = 0; i < len; i += 4) {
+      s += Math.abs(b[i] - a[i]);
+      c++;
+    }
+    const mean = c ? s / c : 0;
+    if (mean > maxMean) maxMean = mean;
+  }
+  return maxMean > 0.5;
+}
+
+export type ScanResult = {
+  windows: SwingWindow[];
+  scannedS: number;
+  truncated: boolean;
+  decoded: boolean; // did the browser decode changing pixels? (false ⇒ likely a dead HEVC decode)
+  fellBack: boolean; // true ⇒ windows are whole-clip chunks, not real motion detections
+};
 
 // Cheap first pass over a long video: downscaled pixel-diff motion energy
-// (no pose model), played back fast via requestVideoFrameCallback when available.
-// Returns candidate swing windows; the dense pose pass validates each one.
+// (no pose model), played back fast via requestVideoFrameCallback when available,
+// with a deterministic seek-based scan as a robust fallback. Returns candidate
+// swing windows; the dense pose pass validates each one. Never returns an empty
+// window list — a scan that finds nothing degrades to whole-clip chunks.
 export async function scanForSwings(
   video: HTMLVideoElement,
   onProgress: (pct: number) => void
-): Promise<{ windows: SwingWindow[]; scannedS: number; truncated: boolean }> {
+): Promise<ScanResult> {
   const duration = video.duration;
   const cap = Math.min(duration, SCAN_CAP_S);
   const truncated = duration > SCAN_CAP_S + 1;
@@ -180,28 +320,63 @@ export async function scanForSwings(
   c.width = w;
   c.height = h;
   const ctx = c.getContext("2d", { willReadFrequently: true });
-  if (!ctx) return { windows: [{ start: 0, end: Math.min(duration, 8) }], scannedS: cap, truncated };
+  if (!ctx) return { windows: chunkWindows(duration), scannedS: cap, truncated, decoded: false, fellBack: true };
 
   let prev: Uint8ClampedArray | null = null;
   let prevT = -1;
   const ts: number[] = [];
   const es: number[] = [];
 
+  // Localized motion energy: per-pixel |Δluma| accumulated into a 4×4 tile grid,
+  // and the energy is the MAX tile's mean (÷ dt). Taking the max tile — not the
+  // whole-frame mean — keeps a small, fast-moving golfer from being averaged away
+  // under a busy range background. That whole-frame dilution is the device-
+  // independent reason real range clips read as "no motion".
+  const TX = 4, TY = 4;
   const grab = (t: number) => {
     ctx.drawImage(video, 0, 0, w, h);
     const d = ctx.getImageData(0, 0, w, h).data;
     if (prev && t > prevT + 0.01) {
-      let s = 0;
-      let cnt = 0;
-      for (let i = 1; i < d.length; i += 8) {
-        s += Math.abs(d[i] - prev[i]); // green channel, every other pixel
-        cnt++;
+      const sum = new Float64Array(TX * TY);
+      const cnt = new Int32Array(TX * TY);
+      for (let y = 0; y < h; y++) {
+        const ty = Math.min(TY - 1, ((y * TY) / h) | 0);
+        for (let x = 0; x < w; x++) {
+          const p = (y * w + x) * 4;
+          // Rec.601 luma over all channels (more robust than green-only).
+          const lc = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
+          const lp = (prev[p] * 77 + prev[p + 1] * 150 + prev[p + 2] * 29) >> 8;
+          const ti = ty * TX + Math.min(TX - 1, ((x * TX) / w) | 0);
+          sum[ti] += Math.abs(lc - lp);
+          cnt[ti]++;
+        }
+      }
+      let maxTile = 0;
+      for (let i = 0; i < sum.length; i++) {
+        const m = cnt[i] ? sum[i] / cnt[i] : 0;
+        if (m > maxTile) maxTile = m;
       }
       ts.push((prevT + t) / 2);
-      es.push(s / cnt / Math.max(0.05, t - prevT));
+      es.push(maxTile / Math.max(0.05, t - prevT));
     }
     prev = d;
     prevT = t;
+  };
+
+  // Deterministic seek-based sampler. Forces a decode per step (works even when an
+  // offscreen / HEVC video won't present frames for requestVideoFrameCallback), so
+  // it's the robust fallback for the fast rVFC playback path below.
+  const seekScan = async () => {
+    prev = null;
+    prevT = -1;
+    ts.length = 0;
+    es.length = 0;
+    const step = 0.25;
+    for (let t = 0; t < cap; t += step) {
+      await seekTo(video, t);
+      grab(t);
+      onProgress(Math.min(100, Math.round((t / cap) * 100)));
+    }
   };
 
   const v = video as HTMLVideoElement & {
@@ -211,55 +386,66 @@ export async function scanForSwings(
   if (typeof v.requestVideoFrameCallback === "function") {
     await seekTo(video, 0);
     video.muted = true;
-    video.playbackRate = Math.min(8, Math.max(2, cap / 12));
+    // Cap at 4× (was 8×): a high-bitrate HEVC decoder outrun by fast playback
+    // presents too few frames to locate a ~0.4s swing.
+    video.playbackRate = Math.min(4, Math.max(2, cap / 12));
     try {
       await video.play();
     } catch {
       /* muted autoplay should always be allowed */
     }
+    let stalled = false;
     await new Promise<void>((resolve) => {
       let done = false;
-      const finish = () => {
-        if (!done) {
-          done = true;
-          clearTimeout(watchdog);
-          resolve();
-        }
+      const STALL_MS = 3000;
+      const finish = (didStall: boolean) => {
+        if (done) return;
+        done = true;
+        if (didStall) stalled = true;
+        clearTimeout(watchdog);
+        resolve();
       };
-      let watchdog = setTimeout(finish, 10000);
+      // A 3s gap between presented frames means playback stalled (offscreen
+      // throttling / HEVC won't present) — fall through to the seek scan.
+      let watchdog = setTimeout(() => finish(true), STALL_MS);
       const loop = (_: number, meta: { mediaTime: number }) => {
         if (done) return;
         clearTimeout(watchdog);
-        watchdog = setTimeout(finish, 10000);
+        watchdog = setTimeout(() => finish(true), STALL_MS);
         grab(meta.mediaTime);
         onProgress(Math.min(100, Math.round((meta.mediaTime / cap) * 100)));
         if (meta.mediaTime >= cap || video.ended) {
-          finish();
+          finish(false);
           return;
         }
         v.requestVideoFrameCallback!(loop);
       };
       v.requestVideoFrameCallback!(loop);
-      video.addEventListener("ended", finish, { once: true });
-      video.addEventListener("error", finish, { once: true });
+      video.addEventListener("ended", () => finish(false), { once: true });
+      video.addEventListener("error", () => finish(true), { once: true });
     });
     video.pause();
     video.playbackRate = 1;
+    // Fall back to the deterministic seek scan when fast playback stalled and either
+    // gave too few usable diffs (a duplicate-mediaTime HEVC stall still increments
+    // `grabbed` but not `es`, so gate on es.length, not grabbed) or never covered most
+    // of the clip. seekScan() fully resets state, so re-running it is safe/idempotent.
+    if (stalled && (es.length < 5 || prevT < cap * 0.8)) await seekScan();
   } else {
-    const step = 0.25;
-    for (let t = 0; t < cap; t += step) {
-      await seekTo(video, t);
-      grab(t);
-      onProgress(Math.min(100, Math.round((t / cap) * 100)));
-    }
+    await seekScan();
   }
 
-  if (es.length < 5) return { windows: [{ start: 0, end: Math.min(duration, 8) }], scannedS: cap, truncated };
+  const maxEs = es.length ? es.reduce((a, b) => Math.max(a, b), 0) : 0;
+  const decoded = maxEs > 0.5; // any real pixel change ⇒ frames actually decoded
+
+  if (es.length < 5) return { windows: chunkWindows(duration), scannedS: cap, truncated, decoded, fellBack: true };
 
   // Robust threshold: median + k·MAD, with floors so constant background motion doesn't drown it.
+  // Floors loosened (0.25·med / 1.2 abs) so a small subject's swing clears them; the dense
+  // pose pass + swingQuality remain the real arbiter, so extra candidates cost time, not false swings.
   const med = median(es);
   const mad = median(es.map((e) => Math.abs(e - med)));
-  const thr = med + Math.max(4 * mad, 0.6 * med, 1.5);
+  const thr = med + Math.max(3 * mad, 0.25 * med, 1.2);
 
   type Burst = { s: number; e: number; n: number; max: number };
   const bursts: Burst[] = [];
@@ -278,8 +464,8 @@ export async function scanForSwings(
   }
   if (cur) bursts.push(cur);
 
-  // Single-sample blips must be strong to count (the dense pass still validates everything).
-  const strong = bursts.filter((b) => b.n >= 2 || b.max >= 2 * thr);
+  // Single-sample blips must be reasonably strong to count (the dense pass still validates everything).
+  const strong = bursts.filter((b) => b.n >= 2 || b.max >= 1.5 * thr);
 
   // Expand to include the still address before and the finish hold after, then merge.
   const expanded = strong.map((b) => ({
@@ -295,5 +481,9 @@ export async function scanForSwings(
   // Keep windows a sane length for the dense pass.
   const windows = merged.map((wn) => ({ start: wn.start, end: Math.min(wn.end, wn.start + 9) })).slice(0, 10);
 
-  return { windows, scannedS: cap, truncated };
+  // The cheap scan is never allowed to veto the clip: if it found no burst, hand back
+  // overlapping whole-clip chunks and let the reliable pose pass adjudicate them.
+  if (!windows.length) return { windows: chunkWindows(duration), scannedS: cap, truncated, decoded, fellBack: true };
+
+  return { windows, scannedS: cap, truncated, decoded, fellBack: false };
 }

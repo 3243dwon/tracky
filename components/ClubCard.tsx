@@ -46,8 +46,8 @@ export default function ClubCard({
     <div className="clubcard">
       <canvas ref={canvasRef} className="clubcanvas" />
       <div className="clublegend">
-        <span><i className="sw cyan" /> backswing</span>
-        <span><i className="sw mag" /> downswing</span>
+        <span><i className="sw cyan" /> backswing 上杆</span>
+        <span><i className="sw mag" /> downswing 下杆</span>
         <span className="num">trace {club.quality.toFixed(2)}/1.0 · {club.coveragePct.toFixed(0)}% tracked</span>
       </div>
 
@@ -55,22 +55,26 @@ export default function ClubCard({
         <p className="note">
           Weak trace on this clip — motion tracking needs a steady phone, plain background and the whole club in
           frame. The arc read below is unreliable here; the body metrics above still hold.
+          <br />
+          这段视频的轨迹偏弱——运动追踪需要稳定的手机、干净的背景，以及整支球杆都在画面里。下面这条弧线在这里不可靠；
+          上面的身体数据依然有效。
         </p>
       ) : (
         <p className="note">
-          Relative read only — one camera can&apos;t give mph or clubface angle.{" "}
+          Relative read only — one camera can&apos;t give mph or clubface angle. 仅为相对读数——单摄像头给不了 mph
+          或杆面角度。{" "}
           {loopKnown && (
             <>
-              Transition loop:{" "}
+              Transition loop 转换轨迹:{" "}
               <b>
                 {overTop
-                  ? `downswing ~${club.loopPct.toFixed(0)}% of body height wider/outside the backswing (over-the-top tendency)`
-                  : `downswing tracks inside the backswing (in-to-out tendency)`}
+                  ? `downswing ~${club.loopPct.toFixed(0)}% of body height wider/outside the backswing (over-the-top tendency) · 下杆比上杆更宽/更外侧，约占身高 ${club.loopPct.toFixed(0)}%（有过顶倾向）`
+                  : `downswing tracks inside the backswing (in-to-out tendency) · 下杆走在上杆内侧（有由内向外的倾向）`}
               </b>
               .{" "}
             </>
           )}
-          {!Number.isNaN(club.peakSpeedPct) && <>Peak speed {club.peakSpeedPct.toFixed(0)}% body-height/frame near impact.</>}
+          {!Number.isNaN(club.peakSpeedPct) && <>Peak speed {club.peakSpeedPct.toFixed(0)}% body-height/frame near impact. 触球附近峰值速度 {club.peakSpeedPct.toFixed(0)}% 身高/帧。</>}
         </p>
       )}
     </div>

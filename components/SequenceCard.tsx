@@ -8,7 +8,7 @@ const COLOR: Record<string, string> = {
   torso: "#4ce17e",
   hands: "#ffb056",
 };
-const NAME: Record<string, string> = { pelvis: "Pelvis", torso: "Torso", hands: "Hands" };
+const NAME: Record<string, string> = { pelvis: "Pelvis 骨盆", torso: "Torso 躯干", hands: "Hands 手" };
 
 export default function SequenceCard({ analysis }: { analysis: Analysis }) {
   const { ref, inView } = useInView<HTMLDivElement>(0.25);
@@ -94,27 +94,27 @@ export default function SequenceCard({ analysis }: { analysis: Analysis }) {
 
       <p className="note">
         {seq.textbook
-          ? "Proximal-to-distal (pelvis → torso → hands) — the classic speed-summation chain."
-          : "Not the textbook pelvis → torso → hands order — neither are ~75% of PGA swings. What matters is whether YOUR pattern repeats."}{" "}
-        Peak rotation speeds, time before impact.
+          ? "Proximal-to-distal (pelvis → torso → hands) — the classic speed-summation chain. 由近到远（骨盆 → 躯干 → 手）——经典的速度叠加动力链。"
+          : "Not the textbook pelvis → torso → hands order — neither are ~75% of PGA swings. What matters is whether YOUR pattern repeats. 不是教科书式的骨盆 → 躯干 → 手顺序——约 75% 的 PGA 球员也不是。关键在于你自己的发力模式是否稳定重复。"}{" "}
+        Peak rotation speeds, time before impact. 峰值旋转速度，及触球前的时间。
       </p>
 
       {xf && (
         <div className="xfactor">
           <div className="stat">
-            <div className="k">X-factor at top</div>
+            <div className="k">X-factor at top 顶点 X-factor</div>
             <div className="v num">
               {xf.topDeg.toFixed(0)}°
             </div>
           </div>
           <div className="stat">
-            <div className="k">Peak in downswing</div>
+            <div className="k">Peak in downswing 下杆峰值</div>
             <div className="v num">
               {xf.peakDeg.toFixed(0)}°
             </div>
           </div>
           <div className="stat">
-            <div className="k">Stretch</div>
+            <div className="k">Stretch 拉伸</div>
             <div className="v num">
               {xf.stretchPct >= 0 ? "+" : ""}
               {xf.stretchPct.toFixed(0)}%
@@ -126,6 +126,9 @@ export default function SequenceCard({ analysis }: { analysis: Analysis }) {
         Research: the static top number does <b>not</b> separate skill levels — the downswing <b>stretch</b> does
         (elite ≈ +19% vs +13%). All rotation here comes from single-camera depth estimates: trust the order and trend,
         not the exact degrees.
+        <br />
+        研究表明：顶点的静态数字<b>区分不了</b>水平高低——真正区分的是下杆时的<b>拉伸</b>（高手约 +19%，普通约
+        +13%）。这里所有旋转数据都来自单摄像头深度估算：相信顺序和趋势，别太较真具体度数。
       </p>
     </div>
   );
