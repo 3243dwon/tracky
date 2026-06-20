@@ -85,20 +85,81 @@ async function fetchModel(url: string, onProgress?: (p: number) => void): Promis
   }
 }
 
+// Reject if `p` hasn't settled within `ms` (and swallow its late result/throw so a
+// hung GPU init can't surface an unhandled rejection after we've moved on).
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error("init-timeout")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(to);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(to);
+        reject(e);
+      }
+    );
+  });
+}
+
 // numPoses: 2 so a single background person on a busy range doesn't crowd out the golfer
-// (pickGolfer() below selects the right body). Lite model on phones (faster download + pass);
-// only the fetch is fallible — createFromOptions runs once so a GPU/init failure propagates.
-export async function createLandmarker(onProgress?: (pct: number) => void): Promise<Landmarker> {
+// (pickGolfer() below selects the right body). Lite model on phones (faster download + pass).
+//
+// The GPU delegate is fast, but on some iOS/WebKit GPUs createFromOptions can HANG during
+// init — which strands the loader at "100%" (download done, engine never starts; the exact
+// freeze users reported). So race the GPU init against a timeout and fall back to the CPU
+// delegate, which is slower per frame but initializes reliably everywhere. If CPU also fails
+// it throws (not hangs), so the caller shows a real error instead of an endless spinner.
+export async function createLandmarker(
+  onProgress?: (pct: number) => void,
+  onStage?: (msg: string) => void
+): Promise<Landmarker> {
   const vision = await import("@mediapipe/tasks-vision");
   const fileset = await vision.FilesetResolver.forVisionTasks(WASM);
   const url = onMobile() ? MODEL_LITE : MODEL_FULL;
   const buf = await fetchModel(url, onProgress);
-  const lm = await vision.PoseLandmarker.createFromOptions(fileset, {
-    baseOptions: { ...(buf ? { modelAssetBuffer: buf } : { modelAssetPath: url }), delegate: "GPU" },
-    runningMode: "VIDEO",
-    numPoses: 2,
-  });
-  return lm as unknown as Landmarker;
+  const base = buf ? { modelAssetBuffer: buf } : { modelAssetPath: url };
+  const make = (delegate: "GPU" | "CPU") =>
+    vision.PoseLandmarker.createFromOptions(fileset, {
+      baseOptions: { ...base, delegate },
+      runningMode: "VIDEO",
+      numPoses: 2,
+    });
+  // Generous ceiling so a genuinely slow phone still finishes, but a true hang ends
+  // as an error the caller can show rather than a forever-spinner.
+  const cpu = async () => {
+    onStage?.("Starting the pose engine (compatibility mode)…");
+    return (await withTimeout(make("CPU"), 20000)) as unknown as Landmarker;
+  };
+
+  // Once a device's GPU has hung, skip straight to CPU on later visits so it never
+  // pays the 7s timeout again.
+  if (delegatePref() === "CPU") return cpu();
+
+  onStage?.("Starting the pose engine…");
+  try {
+    return (await withTimeout(make("GPU"), 7000)) as unknown as Landmarker;
+  } catch {
+    rememberCpuDelegate();
+    return cpu();
+  }
+}
+
+const DELEGATE_KEY = "tracky-delegate";
+function delegatePref(): "GPU" | "CPU" {
+  try {
+    return localStorage.getItem(DELEGATE_KEY) === "cpu" ? "CPU" : "GPU";
+  } catch {
+    return "GPU";
+  }
+}
+function rememberCpuDelegate(): void {
+  try {
+    localStorage.setItem(DELEGATE_KEY, "cpu");
+  } catch {
+    /* storage unavailable — we'll just retry GPU next time */
+  }
 }
 
 // With numPoses > 1 MediaPipe can also return a background person. Selecting per-frame by

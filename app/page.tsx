@@ -240,7 +240,7 @@ export default function Page() {
       setStage("model");
       setPct(0);
       setBusy("Downloading the pose model — first time only, then cached (instant after).");
-      if (!landmarkerRef.current) landmarkerRef.current = await createLandmarker(setPct);
+      if (!landmarkerRef.current) landmarkerRef.current = await createLandmarker(setPct, setBusy);
       const lm = landmarkerRef.current;
 
       const video = procRef.current!;
