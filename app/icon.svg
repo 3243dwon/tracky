@@ -4,14 +4,19 @@
       <stop offset="0" stop-color="#12190f"/>
       <stop offset="1" stop-color="#070b07"/>
     </linearGradient>
-    <linearGradient id="arc" x1="12" y1="38" x2="52" y2="38" gradientUnits="userSpaceOnUse">
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#318042"/>
+      <stop offset="1" stop-color="#1a4826"/>
+    </linearGradient>
+    <linearGradient id="flag" x1="27" y1="20" x2="47" y2="20" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ff9a36"/>
-      <stop offset="0.55" stop-color="#ffb056"/>
-      <stop offset="1" stop-color="#4ce17e"/>
+      <stop offset="1" stop-color="#ffbf63"/>
     </linearGradient>
   </defs>
   <rect width="64" height="64" rx="15" fill="url(#bg)"/>
   <rect x="1" y="1" width="62" height="62" rx="14" fill="none" stroke="#3a523c" stroke-opacity="0.5" stroke-width="1.5"/>
-  <path d="M12 38 Q 32 12 52 38" stroke="url(#arc)" stroke-width="6.5" stroke-linecap="round"/>
-  <circle cx="52" cy="38" r="4.6" fill="#62e58c"/>
+  <ellipse cx="33" cy="50" rx="21" ry="7" fill="url(#green)"/>
+  <line x1="27" y1="49" x2="27" y2="13" stroke="#e8eee1" stroke-width="2.3" stroke-linecap="round"/>
+  <path d="M27 14 L47 19 L27 26 Z" fill="url(#flag)"/>
+  <circle cx="41" cy="48" r="5" fill="#f4f8f1"/>
 </svg>

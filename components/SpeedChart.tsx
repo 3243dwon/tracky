@@ -1,6 +1,7 @@
 "use client";
 
 import type { Analysis } from "@/lib/analysis";
+import { gradeHandSpeed } from "@/lib/grade";
 import { useInView } from "./useInView";
 
 // Nose-to-ankle (our normalization unit) ≈ 0.89 × standing height.
@@ -71,6 +72,14 @@ export default function SpeedChart({
           <div className="v num">
             ~{peakMph.toFixed(0)} <small>mph</small>
           </div>
+          {(() => {
+            const hsg = gradeHandSpeed(sp.peak);
+            return hsg ? (
+              <span className={`grade ${hsg.level}`}>
+                {hsg.en} {hsg.zh} · rough 粗略
+              </span>
+            ) : null;
+          })()}
         </div>
         <div className="stat">
           <div className="k">At impact 触球瞬间</div>

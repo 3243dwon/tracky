@@ -30,7 +30,7 @@ export default function Intro() {
   return (
     <div className={done ? "intro done" : "intro"} aria-hidden="true">
       <div className="introword">
-        {Array.from("SWING·CV").map((c, i) => (
+        {Array.from("TRACK·Y").map((c, i) => (
           <span key={i} className={c === "·" ? "ich dot" : "ich"} style={{ animationDelay: `${120 + i * 65}ms` }}>
             {c}
           </span>

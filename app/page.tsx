@@ -13,6 +13,7 @@ import {
   type SwingWindow,
 } from "@/lib/pose";
 import { analyzeClub, type ClubAnalysis } from "@/lib/club";
+import { readMetrics, type Grade } from "@/lib/grade";
 import {
   SCHEMA,
   saveSwing,
@@ -53,6 +54,16 @@ function Chars({ text, from = 0 }: { text: string; from?: number }) {
         </span>
       ))}
     </>
+  );
+}
+
+function GradeBadge({ g, rough }: { g: Grade | null; rough?: boolean }) {
+  if (!g) return null;
+  return (
+    <span className={`grade ${g.level}`}>
+      {g.en} {g.zh}
+      {rough ? " · rough 粗略" : ""}
+    </span>
   );
 }
 
@@ -492,6 +503,8 @@ export default function Page() {
   // A window that only squeaked past the loosened quality gate — hedge the read and
   // drop the prescriptive drills/plan so a marginal track can't pose as a confident diagnosis.
   const lowConf = cur?.analysis.quality.confidence === "low";
+  // Good/okay/needs-work ratings + a data-driven suggestive read of the metrics.
+  const mread = m ? readMetrics(m, cur.analysis.speed) : null;
   const idle = stage === "idle" || stage === "done" || stage === "error";
   const showMain = overlay === "none";
 
@@ -499,7 +512,7 @@ export default function Page() {
     <div className="wrap">
       <header className="app">
         <h1>
-          SWING<span className="dot">·</span>CV
+          TRACK<span className="dot">·</span>Y
         </h1>
         <svg className="arc" viewBox="0 0 220 26" aria-hidden="true">
           <path
@@ -688,7 +701,7 @@ export default function Page() {
             </div>
           </Reveal>
 
-          <p className="footer">Swing·CV · on-device pose via MediaPipe · no upload · no account</p>
+          <p className="footer">Tracky · on-device pose via MediaPipe · no upload · no account</p>
         </div>
       )}
 
@@ -814,15 +827,13 @@ export default function Page() {
 
           <Reveal>
             <div className="section-title">Reliable metrics 可靠的数据</div>
-            <p className="note" style={{ marginTop: -2 }}>
-              Read these as <b>repeatability markers</b>, not a report card — the skill signal in the research is how
-              tightly your <b>own</b> numbers repeat (r = 0.801), not how close they sit to a model swing. There&apos;s
-              no one perfect swing to chase: <b>Scottie Scheffler</b> has footwork most coaches would &ldquo;fix,&rdquo;
-              yet delivers the club cleanly — it&apos;s the delivery that counts, not the cosmetics.
-              这些请当作<b>可重复性</b>的标尺，不是成绩单——研究里的水平信号是你<b>自己</b>的数字重复得有多紧
-              （r = 0.801），而不是离某个标准挥杆有多近。没有一个完美挥杆值得你去照搬：<b>斯科蒂·舍夫勒</b>的脚步是
-              多数教练想「修正」的，但他的球杆交付依然干净——真正算数的是交付，不是外形。
-            </p>
+            {mread && (
+              <p className="note" style={{ marginTop: -2 }}>
+                {mread.leadEn}
+                <br />
+                {mread.leadZh}
+              </p>
+            )}
             <div className="metrics">
               <div className="metric">
                 <div className="k">Tempo 节奏</div>
@@ -830,6 +841,7 @@ export default function Page() {
                   {Number.isNaN(m.tempoRatio) ? "—" : <CountUp value={m.tempoRatio} decimals={1} />}{" "}
                   <small>: 1 · smooth ≈ 3:1（流畅约 3:1）</small>
                 </div>
+                <GradeBadge g={mread?.tempo ?? null} />
               </div>
               <div className="metric">
                 <div className="k">Camera (auto) 拍摄视角</div>
@@ -843,6 +855,7 @@ export default function Page() {
                   <CountUp value={m.headSwayPct} />
                   <small>% of height（占身高）</small>
                 </div>
+                <GradeBadge g={mread?.sway ?? null} />
               </div>
               <div className="metric">
                 <div className="k">Head move (vertical) 头部上下移动</div>
@@ -850,6 +863,7 @@ export default function Page() {
                   <CountUp value={m.headVertPct} />
                   <small>% of height（占身高）</small>
                 </div>
+                <GradeBadge g={mread?.vert ?? null} />
               </div>
             </div>
           </Reveal>
@@ -999,8 +1013,10 @@ export default function Page() {
               </div>
             ) : (
               <div className="reco">
-                <b>No destructive fault the camera can see — so make two concrete moves:</b>
+                <b>No destructive fault the camera can see</b> — but this isn&apos;t a generic verdict. {mread?.focusEn}
                 <br />
+                <br />
+                <b>Two moves either way:</b>
                 <br />
                 • <b>Now, in this tool.</b> Film <b>3+ swings</b> and let the consistency panel surface your wobbliest
                 number — then tighten <em>that</em> one with random practice and re-film. Repeating your own motion
@@ -1013,7 +1029,10 @@ export default function Page() {
                 go, not where it&apos;s fun to bash balls.
                 <br />
                 <br />
-                <b>镜头看不到任何破坏性失误——那就做两个具体动作：</b>
+                <b>镜头看不到任何破坏性失误</b>——但这不是一句套话。{mread?.focusZh}
+                <br />
+                <br />
+                <b>无论如何，两个动作：</b>
                 <br />
                 • <b>现在，在这个工具里。</b>拍 <b>3 次以上挥杆</b>，让稳定性面板找出你波动最大的那个数字——然后用随机练习
                 把<em>那一个</em>练稳，再重拍。重复你自己的动作（r = 0.801）才是诚实的水平标尺，而不是贴模板。
@@ -1073,7 +1092,7 @@ export default function Page() {
             全程在你的设备上运行，不上传任何东西。二维单摄像头姿态：节奏、头部稳定性和关键位置可靠；旋转/速度和杆头
             追踪是诚实的估算；它<b>看不到杆面</b>，所以能标记过顶轨迹，但无法区分右曲和拉球。
           </p>
-          <p className="footer">Swing·CV · on-device pose via MediaPipe · no upload · no account</p>
+          <p className="footer">Tracky · on-device pose via MediaPipe · no upload · no account</p>
         </div>
       )}
     </div>
