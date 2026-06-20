@@ -9,23 +9,43 @@ type Landmarker = {
 };
 
 const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10/wasm";
-const MODEL =
+const MODEL_FULL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task";
+// ~3MB vs ~10MB, and 2-3x faster per-frame inference — used on phones, where both the
+// download and the pose pass are the bottleneck. Desktop keeps the more accurate full model.
+const MODEL_LITE =
+  "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
+const MODEL_CACHE = "tracky-model-v1";
+const MODEL_BYTES_EST = 6_000_000; // only used if Content-Length is missing (lite ~5.8MB)
 
-// numPoses: 2 so a single background person on a busy range doesn't crowd out the
-// golfer; pickGolfer() below selects the right body. Model is fetched with streaming
-// progress (a bare spinner on first load looks exactly like the "stuck at 0%" hang).
-export async function createLandmarker(onProgress?: (pct: number) => void): Promise<Landmarker> {
-  const vision = await import("@mediapipe/tasks-vision");
-  const fileset = await vision.FilesetResolver.forVisionTasks(WASM);
-  // Fetch the model ourselves so first load shows real % progress (a bare 0% spinner is
-  // indistinguishable from the "stuck at 0%" hang). Only the FETCH is in the try/catch —
-  // createFromOptions runs once below, so a GPU/init failure propagates instead of silently
-  // re-downloading 10MB. On a fetch/CORS failure we fall back to MediaPipe's own URL load.
-  let buf: Uint8Array | null = null;
+function onMobile(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return (
+    /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) // iPadOS reports as Mac
+  );
+}
+
+// Fetch the model, CACHE-FIRST. The Cache API persists across sessions far more reliably
+// than the HTTP cache on iOS, so the ~10MB (or ~3MB lite) model downloads ONCE ever instead
+// of on every cold visit. Streaming % progress on the first download (a bare 0% spinner is
+// indistinguishable from the "stuck at 0%" hang users came to escape).
+async function fetchModel(url: string, onProgress?: (p: number) => void): Promise<Uint8Array | null> {
   try {
-    const resp = await fetch(MODEL);
-    if (!resp.ok || !resp.body) throw new Error("model fetch failed");
+    if (typeof caches !== "undefined") {
+      const cache = await caches.open(MODEL_CACHE);
+      const hit = await cache.match(url);
+      if (hit) {
+        onProgress?.(100);
+        return new Uint8Array(await hit.arrayBuffer());
+      }
+    }
+  } catch {
+    /* cache unavailable (private mode etc.) — just fetch */
+  }
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok || !resp.body) return null;
     const total = Number(resp.headers.get("content-length")) || 0;
     const reader = resp.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -35,27 +55,46 @@ export async function createLandmarker(onProgress?: (pct: number) => void): Prom
       if (done) break;
       chunks.push(value);
       loaded += value.length;
-      // With a Content-Length use it; without one, estimate against the ~10MB model so the
-      // bar still moves instead of sitting at 0 until the final snap to 100.
       onProgress?.(
         total > 0
           ? Math.min(99, Math.round((loaded / total) * 100))
-          : Math.min(95, Math.round((loaded / 10_000_000) * 100))
+          : Math.min(95, Math.round((loaded / MODEL_BYTES_EST) * 100))
       );
     }
-    const b = new Uint8Array(loaded);
+    const buf = new Uint8Array(loaded);
     let off = 0;
     for (const c of chunks) {
-      b.set(c, off);
+      buf.set(c, off);
       off += c.length;
     }
-    buf = b;
     onProgress?.(100);
+    try {
+      if (typeof caches !== "undefined") {
+        const cache = await caches.open(MODEL_CACHE);
+        await cache.put(
+          url,
+          new Response(buf, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(buf.length) } })
+        );
+      }
+    } catch {
+      /* couldn't persist — fine, just slower next time */
+    }
+    return buf;
   } catch {
-    buf = null; // streaming fetch failed — fall back to a URL load below
+    return null; // network/CORS failure — caller falls back to MediaPipe's own URL load
   }
+}
+
+// numPoses: 2 so a single background person on a busy range doesn't crowd out the golfer
+// (pickGolfer() below selects the right body). Lite model on phones (faster download + pass);
+// only the fetch is fallible — createFromOptions runs once so a GPU/init failure propagates.
+export async function createLandmarker(onProgress?: (pct: number) => void): Promise<Landmarker> {
+  const vision = await import("@mediapipe/tasks-vision");
+  const fileset = await vision.FilesetResolver.forVisionTasks(WASM);
+  const url = onMobile() ? MODEL_LITE : MODEL_FULL;
+  const buf = await fetchModel(url, onProgress);
   const lm = await vision.PoseLandmarker.createFromOptions(fileset, {
-    baseOptions: { ...(buf ? { modelAssetBuffer: buf } : { modelAssetPath: MODEL }), delegate: "GPU" },
+    baseOptions: { ...(buf ? { modelAssetBuffer: buf } : { modelAssetPath: url }), delegate: "GPU" },
     runningMode: "VIDEO",
     numPoses: 2,
   });
