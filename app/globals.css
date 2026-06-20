@@ -206,11 +206,31 @@ header.app p { color: var(--muted); font-size: 13.5px; margin: 10px 0 0; }
 .stat .k { color: var(--muted); font-size: 11.5px; }
 .stat .v { font-size: 21px; font-weight: 700; margin-top: 3px; }
 .stat .v small { font-size: 11.5px; color: var(--muted); font-weight: 500; }
-.heightin input {
+.heightin input[type="number"] {
   width: 64px; font-size: 18px; font-weight: 700; color: var(--text);
   background: rgba(6, 14, 8, 0.5); border: 1px solid var(--line); border-radius: 8px; padding: 3px 7px;
 }
-.heightin input:focus { outline: none; border-color: rgba(76, 225, 126, 0.5); }
+.heightin input[type="number"]:focus { outline: none; border-color: rgba(76, 225, 126, 0.5); }
+.heightrange {
+  appearance: none; -webkit-appearance: none; width: 100%; height: 6px; border-radius: 6px; margin-top: 11px;
+  background: rgba(148, 190, 158, 0.2); cursor: pointer; touch-action: pan-y;
+}
+/* 22px thumb — comfortable to drag with a thumb on iPhone */
+.heightrange::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+  border: 2px solid #06090b; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer;
+}
+.heightrange::-moz-range-thumb {
+  width: 22px; height: 22px; border-radius: 50%; background: var(--accent);
+  border: 2px solid #06090b; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); cursor: pointer;
+}
+.clublegend .sw.white { background: #fff; }
+
+/* a11y: keyboard users need a visible focus ring on controls that strip the
+   native outline (the height slide, sort chips, scrub, etc.) */
+button:focus-visible, input:focus-visible, summary:focus-visible, label:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 
 /* ---------- sequence ---------- */
 .order { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
@@ -316,6 +336,41 @@ header.app p { color: var(--muted); font-size: 13.5px; margin: 10px 0 0; }
 .libsel { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; }
 .libdel { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 6px; }
 .libdel:hover { color: var(--bad); background: rgba(255, 107, 107, 0.1); }
+
+/* Sort controls + bilingual helper */
+.zh { color: var(--muted); }
+.sortbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 12px; }
+.sortbar .sortlabel { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
+.sortchip { font: 500 12px var(--font-d); color: var(--muted); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.sortchip:hover { color: var(--text); border-color: rgba(76, 225, 126, 0.4); }
+.sortchip.on { color: #04220d; background: linear-gradient(180deg, #74e57e, #3cba49); border-color: transparent; }
+
+/* Progress / trends panel */
+.trends { margin-bottom: 16px; }
+.trendline { color: var(--text); font-size: 13.5px; line-height: 1.55; margin: 2px 4px 12px; }
+.trendrow { display: grid; gap: 10px; grid-template-columns: 1fr; }
+@media (min-width: 560px) { .trendrow { grid-template-columns: 1fr 1fr; } }
+.trendstat { border: 1px solid var(--line); border-radius: 12px; background: rgba(8, 16, 11, 0.4); padding: 10px 12px; }
+.trendhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trendlabel { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.trendbadge { font: 600 10.5px var(--font-m); letter-spacing: 0.02em; border: 1px solid; border-radius: 999px; padding: 2px 8px; opacity: 0.92; }
+.trendnow { font-size: 22px; font-weight: 600; color: var(--text); margin: 4px 0 2px; line-height: 1.1; }
+.spark { display: block; margin: 2px 0 4px; overflow: visible; }
+.trendfoot { display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); }
+
+/* Collapsible metrics glossary */
+.glossary { margin: 10px 4px 4px; border: 1px solid var(--line); border-radius: 12px; background: rgba(8, 16, 11, 0.34); }
+.glossary > summary { cursor: pointer; list-style: none; padding: 11px 14px; font: 600 12.5px var(--font-d); color: var(--accent-2); display: flex; align-items: center; gap: 8px; }
+.glossary > summary::-webkit-details-marker { display: none; }
+.glossary > summary::before { content: "+"; font-family: var(--font-m); color: var(--accent); font-size: 14px; line-height: 1; }
+.glossary[open] > summary::before { content: "–"; }
+.glossary[open] > summary { border-bottom: 1px solid var(--line); }
+.glossary dl { margin: 0; padding: 6px 14px 12px; }
+.gterm { padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+.gterm:last-child { border-bottom: 0; }
+.gterm dt { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.gterm dd { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.gterm dd .zh { display: inline-block; margin-top: 2px; }
 
 .cmpseg { margin: 4px 0 14px; }
 .cmpcols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

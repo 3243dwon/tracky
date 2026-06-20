@@ -106,6 +106,37 @@ export function drawClubArc(
   ctx.shadowBlur = 0;
 }
 
+// Ideal swing-plane "stick": the extended address shaft-plane line the downswing
+// should return on. Drawn dashed/white so it reads as a reference, not your path.
+export function drawPlaneLine(
+  ctx: CanvasRenderingContext2D,
+  line: { x1: number; y1: number; x2: number; y2: number },
+  grip: { x: number; y: number },
+  head: { x: number; y: number },
+  w: number,
+  h: number
+): void {
+  const unit = Math.max(2, Math.round(w / 300));
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(255,255,255,0.8)";
+  ctx.lineWidth = unit;
+  ctx.setLineDash([Math.max(7, w / 55), Math.max(5, w / 80)]);
+  ctx.beginPath();
+  ctx.moveTo(line.x1 * w, line.y1 * h);
+  ctx.lineTo(line.x2 * w, line.y2 * h);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // anchor dots: clubhead (ball end) + grip
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  for (const p of [head, grip]) {
+    ctx.beginPath();
+    ctx.arc(p.x * w, p.y * h, unit * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 // Spine line (cyan) + shoulder/hip lines (magenta) — the geometry the metrics use.
 export function drawGeometry(ctx: CanvasRenderingContext2D, lm: LM[], w: number, h: number): void {
   const unit = Math.max(2, Math.round(w / 200));

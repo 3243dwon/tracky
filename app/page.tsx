@@ -30,8 +30,11 @@ import { drawPose, drawGeometry } from "@/lib/draw";
 import Player from "@/components/Player";
 import ClubCard from "@/components/ClubCard";
 import Library from "@/components/Library";
+import Glossary from "@/components/Glossary";
 import ComparePanel from "@/components/ComparePanel";
 import SpeedChart from "@/components/SpeedChart";
+import PaceCard from "@/components/PaceCard";
+import PlaneCard from "@/components/PlaneCard";
 import SequenceCard from "@/components/SequenceCard";
 import ConsistencyCard from "@/components/ConsistencyCard";
 import ScrubHero from "@/components/ScrubHero";
@@ -801,6 +804,15 @@ export default function Page() {
             </Reveal>
           )}
 
+          {cur.analysis.speed && (
+            <Reveal>
+              <div className="section-title">Too fast or too slow? 节奏与速度自检</div>
+              <div className="card">
+                <PaceCard analysis={cur.analysis} heightCm={heightCm} />
+              </div>
+            </Reveal>
+          )}
+
           {cur.analysis.sequence && (
             <Reveal>
               <div className="section-title">Kinematic sequence 动力链顺序 · experimental</div>
@@ -815,6 +827,22 @@ export default function Page() {
               <div className="section-title">Clubhead path 杆头轨迹 · experimental</div>
               <div className="card">
                 <ClubCard
+                  club={club}
+                  phases={cur.analysis.phases}
+                  impactUrl={cur.stills.find((s) => s.name === "impact")?.url ?? cur.stills[0].url}
+                  width={cur.extraction.width}
+                  height={cur.extraction.height}
+                />
+              </div>
+            </Reveal>
+          )}
+
+          {club && club.coveragePct > 0 && cur.analysis.metrics.view === "down-the-line" && (
+            <Reveal>
+              <div className="section-title">Swing plane 挥杆平面 · experimental</div>
+              <div className="card">
+                <PlaneCard
+                  frames={cur.extraction.frames}
                   club={club}
                   phases={cur.analysis.phases}
                   impactUrl={cur.stills.find((s) => s.name === "impact")?.url ?? cur.stills[0].url}
@@ -876,6 +904,8 @@ export default function Page() {
             的帧里追踪到了身体。脊柱角度（受视角影响，仅供参考）：{m.spineAddrDeg.toFixed(0)}° →{" "}
             {m.spineTopDeg.toFixed(0)}° → {m.spineImpactDeg.toFixed(0)}°。
           </p>
+
+          <Glossary />
 
           <Reveal>
             <div className="section-title">Faults that actually cost strokes 真正让你丢杆的问题</div>

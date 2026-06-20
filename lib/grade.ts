@@ -1,8 +1,10 @@
 // Turns raw metrics into a good / okay / needs-work read + a suggestive, data-driven
 // summary — so "Tempo 2.0" reads as "a touch quick" rather than a bare number, and the
 // metrics lead-in + "what to work on" change with the actual swing instead of a fixed line.
-// Thresholds mirror the fault gates in analysis.ts (sway>15, vert>12, tempo<1.8) so the
-// badges never contradict whether a fault fired.
+// Thresholds align with the fault gates in analysis.ts: sway and vert are symmetrical
+// (grade "work" at >15 / >12 exactly where the fault fires), while tempo is intentionally
+// asymmetric — the rushed fault is stricter (fires <1.8) than the grade "ok" edge (2.0),
+// so a 1.9 tempo reads "a touch quick" without firing a fault. Badges never contradict it.
 import type { Metrics, SpeedAnalysis } from "./analysis";
 
 export type Level = "good" | "ok" | "work";

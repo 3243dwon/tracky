@@ -11,7 +11,15 @@ import {
   fromSwingFile,
   type SavedMeta,
 } from "@/lib/library";
+import { sortMetas, type SortKey } from "@/lib/trends";
 import { bhToMph } from "./SpeedChart";
+import Progress from "./Progress";
+
+const SORTS: { key: SortKey; en: string; zh: string }[] = [
+  { key: "newest", en: "Newest", zh: "最新" },
+  { key: "fast", en: "Fastest", zh: "最快" },
+  { key: "smooth", en: "Smoothest", zh: "最流畅" },
+];
 
 // The saved-swing library: a grid of past analyses (thumbnail + key numbers),
 // with select-to-compare (max 2), delete, a storage meter, honest on-device /
@@ -39,7 +47,9 @@ export default function Library({
   const [est, setEst] = useState<{ usage: number; quota: number } | null>(null);
   const [msg, setMsg] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [sort, setSort] = useState<SortKey>("newest");
   const importRef = useRef<HTMLInputElement>(null);
+  const shown = sortMetas(metas, sort);
 
   async function refresh() {
     setMetas(await listMeta());
@@ -132,6 +142,8 @@ export default function Library({
         </div>
       </div>
 
+      {loaded && metas.length > 0 && <Progress metas={metas} />}
+
       {msg && <p className="note">{msg}</p>}
 
       {sel.length === 2 && (
@@ -160,8 +172,23 @@ export default function Library({
           </p>
         </div>
       ) : (
-        <div className="libgrid">
-          {metas.map((m) => {
+        <>
+          {metas.length > 1 && (
+            <div className="sortbar">
+              <span className="sortlabel">Sort 排序</span>
+              {SORTS.map((s) => (
+                <button
+                  key={s.key}
+                  className={sort === s.key ? "sortchip on" : "sortchip"}
+                  onClick={() => setSort(s.key)}
+                >
+                  {s.en} <span className="zh">{s.zh}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="libgrid">
+            {shown.map((m) => {
             const on = sel.includes(m.id);
             const mph = m.peakBh != null ? Math.round(bhToMph(m.peakBh, m.heightCmAtSave)) : null;
             return (
@@ -190,8 +217,9 @@ export default function Library({
                 </div>
               </div>
             );
-          })}
-        </div>
+            })}
+          </div>
+        </>
       )}
 
       {metas.length > 0 && (

@@ -93,8 +93,16 @@ export function decodeFramesXY(e: EncodedFrames): Frame[] {
       const o = (i * N_LM + j) * 2;
       const x = data[o];
       const y = data[o + 1];
-      if (!Number.isNaN(x)) allNaN = false;
-      lm[j] = { x, y };
+      // A landmark is valid only if BOTH coords are present. encode always writes
+      // x/y together, so a half-NaN pair only comes from a corrupt/hand-edited
+      // file — sanitize it to fully-missing rather than emit {x:NaN, y:123} that
+      // a downstream draw/club reader would index as a real (NaN) point.
+      if (Number.isNaN(x) || Number.isNaN(y)) {
+        lm[j] = { x: NaN, y: NaN };
+      } else {
+        allNaN = false;
+        lm[j] = { x, y };
+      }
     }
     out.push(allNaN ? null : lm);
   }

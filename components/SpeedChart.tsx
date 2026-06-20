@@ -1,15 +1,14 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import type { Analysis } from "@/lib/analysis";
 import { gradeHandSpeed } from "@/lib/grade";
 import { useInView } from "./useInView";
 
-// Nose-to-ankle (our normalization unit) ≈ 0.89 × standing height.
-const M_PER_BH = 0.89;
-
-export function bhToMph(vBh: number, heightCm: number): number {
-  return vBh * (heightCm / 100) * M_PER_BH * 2.23694;
-}
+// Canonical conversion lives in lib/units (shared with trends + pace so the
+// number never drifts); re-exported here so existing imports keep resolving.
+export { bhToMph } from "@/lib/units";
+import { bhToMph } from "@/lib/units";
 
 export default function SpeedChart({
   analysis,
@@ -21,6 +20,19 @@ export default function SpeedChart({
   onHeightCm: (v: number) => void;
 }) {
   const { ref, inView } = useInView<HTMLDivElement>(0.25);
+  // Local editable buffer so you can actually TYPE a height: the field holds raw
+  // keystrokes and only clamps to 120–220 on blur/Enter — the old code clamped on
+  // every keystroke, so typing "180" snapped to 120 the instant you hit "1".
+  const [heightBuf, setHeightBuf] = useState(String(heightCm));
+  useEffect(() => {
+    setHeightBuf(String(heightCm));
+  }, [heightCm]);
+  const commitHeight = () => {
+    const n = parseInt(heightBuf, 10);
+    const v = Number.isNaN(n) ? heightCm : Math.min(220, Math.max(120, n));
+    onHeightCm(v);
+    setHeightBuf(String(v));
+  };
   const sp = analysis.speed;
   if (!sp) return null;
 
@@ -88,18 +100,34 @@ export default function SpeedChart({
           </div>
         </div>
         <div className="stat heightin">
-          <div className="k">Your height (scales mph)</div>
+          <div className="k">Your height 身高<small> · scales mph 换算用</small></div>
           <div className="v">
             <input
               className="num"
               type="number"
+              inputMode="numeric"
               min={120}
               max={220}
-              value={heightCm}
-              onChange={(e) => onHeightCm(Math.min(220, Math.max(120, Number(e.target.value) || 175)))}
+              value={heightBuf}
+              onChange={(e) => setHeightBuf(e.target.value)}
+              onBlur={commitHeight}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              aria-label="your height in centimetres"
             />
             <small> cm</small>
           </div>
+          <input
+            className="heightrange"
+            type="range"
+            min={120}
+            max={220}
+            step={1}
+            value={heightCm}
+            onChange={(e) => onHeightCm(Number(e.target.value))}
+            aria-label="adjust your height in centimetres"
+          />
         </div>
       </div>
 

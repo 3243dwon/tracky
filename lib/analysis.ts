@@ -266,7 +266,7 @@ export function watchNotes(m: Metrics): string[] {
 }
 
 // Linear interpolation over NaN gaps (two-pointer, O(n)).
-function interpNaN(a: number[]): number[] {
+export function interpNaN(a: number[]): number[] {
   const n = a.length;
   const out = a.slice();
   let prev = -1;
