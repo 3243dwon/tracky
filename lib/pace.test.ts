@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyPace,
   classifySpeed,
+  clubSpeedBand,
   handSpeedBandMph,
   readPace,
   PACE_TEMPO_LO,
@@ -60,6 +61,40 @@ describe("handSpeedBandMph", () => {
     expect(b.lo).toBeLessThan(b.hi);
     expect(b.lo).toBeCloseTo(bhToMph(HS_BAND_LO_BH, 178), 6);
     expect(handSpeedBandMph(190).hi).toBeGreaterThan(handSpeedBandMph(160).hi);
+  });
+  it("a driver band sits higher than a wedge band at the same height", () => {
+    expect(handSpeedBandMph(178, "driver").hi).toBeGreaterThan(handSpeedBandMph(178, "wedge").hi);
+  });
+});
+
+describe("clubSpeedBand", () => {
+  it("unset / null = the club-neutral band (today's behavior)", () => {
+    expect(clubSpeedBand(null)).toEqual({ lo: HS_BAND_LO_BH, hi: HS_BAND_HI_BH });
+    expect(clubSpeedBand(undefined)).toEqual({ lo: HS_BAND_LO_BH, hi: HS_BAND_HI_BH });
+    expect(clubSpeedBand("iron")).toEqual({ lo: HS_BAND_LO_BH, hi: HS_BAND_HI_BH });
+  });
+  it("driver > iron > wedge on both edges", () => {
+    const d = clubSpeedBand("driver"), i = clubSpeedBand("iron"), w = clubSpeedBand("wedge");
+    expect(d.lo).toBeGreaterThan(i.lo);
+    expect(i.lo).toBeGreaterThan(w.lo);
+    expect(d.hi).toBeGreaterThan(i.hi);
+    expect(i.hi).toBeGreaterThan(w.hi);
+  });
+  it("putt has no meaningful speed band", () => {
+    const p = clubSpeedBand("putt");
+    expect(Number.isFinite(p.lo)).toBe(false);
+  });
+});
+
+describe("classifySpeed with a club", () => {
+  it("the same speed reads differently per club band", () => {
+    // 2.5 bh/s: inside the driver band (2.2–3.0) but above the wedge band (1.5–2.1).
+    expect(classifySpeed(2.5, "driver")).toBe("typical");
+    expect(classifySpeed(2.5, "wedge")).toBe("high");
+    expect(classifySpeed(2.5)).toBe("typical"); // neutral 1.9–2.6
+  });
+  it("putt yields n/a (speed isn't a putting read)", () => {
+    expect(classifySpeed(2.0, "putt")).toBe("na");
   });
 });
 

@@ -99,6 +99,19 @@ describe("gradeHandSpeed", () => {
     expect(gradeHandSpeed(1.9)?.en).toBe("solid");
     expect(gradeHandSpeed(2.6)?.en).toBe("quick");
   });
+
+  it("the band shifts with the club: a driver demotes, a wedge promotes the same speed", () => {
+    // 2.7 bh/s reads "quick" on the neutral band but only "solid" against a driver band (≤3.0).
+    expect(gradeHandSpeed(2.7)?.en).toBe("quick");
+    expect(gradeHandSpeed(2.7, "driver")?.en).toBe("solid");
+    // 1.6 bh/s is "developing" on neutral but "solid" against a wedge band (≥1.5).
+    expect(gradeHandSpeed(1.6)?.en).toBe("developing");
+    expect(gradeHandSpeed(1.6, "wedge")?.en).toBe("solid");
+  });
+
+  it("never grades a putt's hand speed", () => {
+    expect(gradeHandSpeed(2.0, "putt")).toBeNull();
+  });
 });
 
 describe("readMetrics", () => {

@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import type { Analysis } from "@/lib/analysis";
 import { gradeHandSpeed } from "@/lib/grade";
+import type { Club } from "@/lib/pace";
 import { useInView } from "./useInView";
 
 // Canonical conversion lives in lib/units (shared with trends + pace so the
@@ -14,10 +15,12 @@ export default function SpeedChart({
   analysis,
   heightCm,
   onHeightCm,
+  club,
 }: {
   analysis: Analysis;
   heightCm: number;
   onHeightCm: (v: number) => void;
+  club?: Club | null;
 }) {
   const { ref, inView } = useInView<HTMLDivElement>(0.25);
   // Local editable buffer so you can actually TYPE a height: the field holds raw
@@ -85,7 +88,7 @@ export default function SpeedChart({
             ~{peakMph.toFixed(0)} <small>mph</small>
           </div>
           {(() => {
-            const hsg = gradeHandSpeed(sp.peak);
+            const hsg = gradeHandSpeed(sp.peak, club);
             return hsg ? (
               <span className={`grade ${hsg.level}`}>
                 {hsg.en} {hsg.zh} · rough 粗略

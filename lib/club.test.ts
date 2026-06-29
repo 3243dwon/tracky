@@ -93,6 +93,42 @@ describe("clubFault gating", () => {
   });
 });
 
+describe("clubFault handedness", () => {
+  const fired = () => clubFault(clubAnalysis({ loopPct: 12, coveragePct: 70, quality: 0.8 }), "R")!;
+
+  it("defaults to right-handed (today's behavior)", () => {
+    const f = clubFault(clubAnalysis({ loopPct: 12, coveragePct: 70, quality: 0.8 }))!;
+    expect(f.fix).toContain("out to the right");
+    expect(f.fix).toContain("右手球手");
+  });
+
+  it("gives a right-hander an out-to-the-RIGHT feel-cue", () => {
+    const f = fired();
+    expect(f.fix).toContain("out to the right");
+    expect(f.fix).not.toContain("out to the left");
+    expect(f.fix).toContain("（右手球手）");
+  });
+
+  it("mirrors the feel-cue to the LEFT for a left-hander", () => {
+    const f = clubFault(clubAnalysis({ loopPct: 12, coveragePct: 70, quality: 0.8 }), "L")!;
+    expect(f.fix).toContain("out to the left");
+    expect(f.fix).not.toContain("out to the right");
+    expect(f.fix).toContain("（左手球手）");
+  });
+
+  it("only the feel-cue flips — it's the same fault (still slice/pull) for both", () => {
+    const r = clubFault(clubAnalysis({ loopPct: 12, coveragePct: 70, quality: 0.8 }), "R")!;
+    const l = clubFault(clubAnalysis({ loopPct: 12, coveragePct: 70, quality: 0.8 }), "L")!;
+    expect(r.title).toBe(l.title);
+    expect(r.mishit).toBe(l.mishit);
+    expect(r.focus).toBe(l.focus);
+  });
+
+  it("a clean (inside) path stays silent for either hand", () => {
+    expect(clubFault(clubAnalysis({ loopPct: 2, coveragePct: 70, quality: 0.8 }), "L")).toBeNull();
+  });
+});
+
 describe("analyzeClub guards", () => {
   const { frames, phases } = buildSwing();
   it("returns null when there is no motion data", () => {

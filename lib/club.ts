@@ -20,6 +20,10 @@ const R_MAX_BODY = 0.75;    // ...and at most this far (arm + shaft reach)
 const PRED_PULL_GATE = 0.35; // continuity gate radius (× r_max) around the predicted spot
 const MAX_JUMP_BODY = 0.45; // reject a frame whose head leaps more than this (× body height)
 
+// Which hand the golfer plays — flips the directional corrective in the verdict
+// (an over-the-top path is the same FAULT for both, but the feel-cue mirrors).
+export type Hand = "R" | "L";
+
 export type ClubPoint = { x: number; y: number; conf: number } | null;
 export type ClubAnalysis = {
   path: ClubPoint[];          // normalized [0..1] clubhead per frame (null where unknown)
@@ -220,7 +224,7 @@ function arc(path: ClubPoint[], lo: number, hi: number): ArcPt[] {
 }
 
 // Read the traced arc → over-the-top loop, relative speed, quality, and a fault.
-export function analyzeClubPath(path: ClubPoint[], frames: Frame[], phases: Phases): ClubAnalysis {
+export function analyzeClubPath(path: ClubPoint[], frames: Frame[], phases: Phases, hand: Hand = "R"): ClubAnalysis {
   const { address: a, top: t, impact: im } = phases;
   const addr = nearestFrame(frames, a);
   const scale = addr ? bodyHeight(addr) : 0.6;
@@ -304,18 +308,25 @@ export function analyzeClubPath(path: ClubPoint[], frames: Frame[], phases: Phas
     nDown: down.length,
     fault: null,
   };
-  m.fault = clubFault(m);
+  m.fault = clubFault(m, hand);
   return m;
 }
 
-export function clubFault(m: ClubAnalysis): Fault | null {
+export function clubFault(m: ClubAnalysis, hand: Hand = "R"): Fault | null {
   if (!Number.isNaN(m.loopPct) && m.loopPct > 6 && m.coveragePct > 45 && m.quality > 0.4) {
+    // The over-the-top out-to-in path is the same FAULT for both hands (and produces
+    // a slice/pull for both — mirrored in absolute direction). Only the feel-cue —
+    // which way "out away from the ball" points — flips with handedness.
+    const dirEn = hand === "L" ? "left" : "right";
+    const handEn = hand === "L" ? "left-hander" : "right-hander";
+    const dirZh = hand === "L" ? "左" : "右";
+    const handZh = hand === "L" ? "左手球手" : "右手球手";
     return {
       title: "Over-the-top transition (out-to-in path) · 出杆过顶（外到内轨迹）",
       mishit:
         "the clubhead is starting down outside the ball and cutting across it — that out-to-in path is the engine behind the slice (and the pull). Path is only half the story, though: one camera can't read your face angle, so it can't tell a slice from a pull. 杆头从球的外侧开始下来、再横切过球——这条外到内的路径正是右曲球（和拉球）的根源。但路径只是一半：单摄像头读不到杆面角度，所以分不清右曲和拉球。",
       detail: `downswing arc ~${m.loopPct.toFixed(0)}% of body height wider than the backswing at matched height — you want the magenta downswing tucking INSIDE the cyan backswing · 下杆弧线在同高度比上杆宽约 ${m.loopPct.toFixed(0)}%（占身高）——理想是洋红下杆线收到青色上杆线的内侧`,
-      fix: "Tour players deliver from the INSIDE — they shallow the club in transition instead of throwing it out over the top. Set a headcover or towel just outside the ball and miss it coming down — feel the club drop behind you and swing out to the right (right-hander). Groove it slow, then keep the feel at speed. Re-film; the magenta downswing arc should tuck inside the cyan backswing. 巡回赛球手都是从内侧交付——他们在转换时让杆变平（shallow），而不是把杆甩到外侧、过顶。在球外侧放杆头套或毛巾，下杆避开它——感受杆子掉到身后、向右（右手球手）打出去。先慢动作打进去，再带速度保持这个感觉。重拍：洋红下杆弧线应收到青色上杆线的内侧。",
+      fix: `Tour players deliver from the INSIDE — they shallow the club in transition instead of throwing it out over the top. Set a headcover or towel just outside the ball and miss it coming down — feel the club drop behind you and swing out to the ${dirEn} (${handEn}). Groove it slow, then keep the feel at speed. Re-film; the magenta downswing arc should tuck inside the cyan backswing. 巡回赛球手都是从内侧交付——他们在转换时让杆变平（shallow），而不是把杆甩到外侧、过顶。在球外侧放杆头套或毛巾，下杆避开它——感受杆子掉到身后、向${dirZh}（${handZh}）打出去。先慢动作打进去，再带速度保持这个感觉。重拍：洋红下杆弧线应收到青色上杆线的内侧。`,
       focus: "slice / swing path",
     };
   }
@@ -323,8 +334,8 @@ export function clubFault(m: ClubAnalysis): Fault | null {
 }
 
 // Top-level helper: returns null when there's no motion data or too few frames.
-export function analyzeClub(motion: MotionStack | null, frames: Frame[], phases: Phases): ClubAnalysis | null {
+export function analyzeClub(motion: MotionStack | null, frames: Frame[], phases: Phases, hand: Hand = "R"): ClubAnalysis | null {
   if (!motion || motion.data.length < 6) return null;
   const path = trackClubhead(motion, frames, phases);
-  return analyzeClubPath(path, frames, phases);
+  return analyzeClubPath(path, frames, phases, hand);
 }

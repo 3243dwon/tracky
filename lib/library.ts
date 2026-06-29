@@ -14,7 +14,9 @@
 // Everything stored is strings / numbers / typed-arrays — NO Blob — which is the
 // reliable path on iOS Safari. Nothing leaves the device.
 import type { Analysis, Frame, LM, PhaseName } from "./analysis";
-import type { ClubAnalysis } from "./club";
+import type { ClubAnalysis, Hand } from "./club";
+import type { Club } from "./pace";
+import type { Outcome } from "./outcome";
 
 export const SCHEMA = 1;
 const DB_NAME = "swingcv";
@@ -44,6 +46,12 @@ export type SavedMeta = {
   hasFrames: boolean;
   hasScrubs: boolean;
   sizeBytes: number;
+  // Optional user-supplied context, snapshotted at save time. All OPTIONAL so old
+  // rows (saved before these existed) read undefined and behave exactly as before —
+  // no SCHEMA bump needed (meta isn't schema-gated on read; see getPayload/listMeta).
+  handAtSave?: Hand; // R | L — handedness used for the club verdict's feel-cue
+  clubAtSave?: Club; // driver | iron | wedge | putt — scales the hand-speed band
+  outcomeAtSave?: Outcome; // what the user said the ball did (relates to, never claims, the read)
 };
 
 export type SavedPayload = {

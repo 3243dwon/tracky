@@ -6,6 +6,7 @@
 // asymmetric — the rushed fault is stricter (fires <1.8) than the grade "ok" edge (2.0),
 // so a 1.9 tempo reads "a touch quick" without firing a fault. Badges never contradict it.
 import type { Metrics, SpeedAnalysis } from "./analysis";
+import { clubSpeedBand, type Club } from "./pace";
 
 export type Level = "good" | "ok" | "work";
 export type Grade = { level: Level; en: string; zh: string };
@@ -35,11 +36,14 @@ export function gradeVert(p: number): Grade {
 
 // Hand speed is genuinely hard to grade (it's HAND speed, not clubhead, and "good" depends
 // on club/level), so this is a soft orientation only — never the harsh "work" band — and the
-// UI labels it rough. Bands are on body-heights/sec (height-independent).
-export function gradeHandSpeed(bh: number | null | undefined): Grade | null {
+// UI labels it rough. Bands are on body-heights/sec (height-independent). When the club is
+// known the band shifts with it (driver faster, wedge slower); unset = the neutral band.
+export function gradeHandSpeed(bh: number | null | undefined, club?: Club | null): Grade | null {
   if (!bh || !Number.isFinite(bh)) return null;
-  if (bh >= 2.6) return { level: "good", en: "quick", zh: "偏快" };
-  if (bh >= 1.9) return { level: "ok", en: "solid", zh: "中等" };
+  const b = clubSpeedBand(club);
+  if (!Number.isFinite(b.lo) || !Number.isFinite(b.hi)) return null; // e.g. putt — no speed read
+  if (bh >= b.hi) return { level: "good", en: "quick", zh: "偏快" };
+  if (bh >= b.lo) return { level: "ok", en: "solid", zh: "中等" };
   return { level: "ok", en: "developing", zh: "发展中" };
 }
 
@@ -82,11 +86,11 @@ export type MetricRead = {
   focusZh: string;
 };
 
-export function readMetrics(m: Metrics, speed: SpeedAnalysis | null): MetricRead {
+export function readMetrics(m: Metrics, speed: SpeedAnalysis | null, club?: Club | null): MetricRead {
   const tempo = gradeTempo(m.tempoRatio);
   const sway = gradeSway(m.headSwayPct);
   const vert = gradeVert(m.headVertPct);
-  const hand = gradeHandSpeed(speed?.peak);
+  const hand = gradeHandSpeed(speed?.peak, club);
 
   const core: { key: "tempo" | "sway" | "vert"; g: Grade }[] = [
     ...(tempo ? [{ key: "tempo" as const, g: tempo }] : []),

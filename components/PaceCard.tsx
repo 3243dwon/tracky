@@ -1,7 +1,7 @@
 "use client";
 
 import type { Analysis } from "@/lib/analysis";
-import { readPace, PACE_TEMPO_LO, PACE_TEMPO_HI } from "@/lib/pace";
+import { readPace, PACE_TEMPO_LO, PACE_TEMPO_HI, type Club } from "@/lib/pace";
 
 // "Too fast or too slow?" — a pace verdict (from tempo, so slow-mo can't fool it)
 // plus where your hand speed falls vs a typical range for your height.
@@ -19,8 +19,15 @@ const SPEED: Record<string, { en: string; zh: string; cls: string } | null> = {
   na: null,
 };
 
-export default function PaceCard({ analysis, heightCm }: { analysis: Analysis; heightCm: number }) {
-  const r = readPace(analysis, heightCm);
+const CLUB_LABEL: Record<Club, string> = {
+  driver: "driver 一号木",
+  iron: "iron 铁杆",
+  wedge: "wedge 挖起杆",
+  putt: "putter 推杆",
+};
+
+export default function PaceCard({ analysis, heightCm, club }: { analysis: Analysis; heightCm: number; club?: Club | null }) {
+  const r = readPace(analysis, heightCm, club);
   const pace = PACE[r.pace];
   const speed = SPEED[r.speed];
 
@@ -58,10 +65,18 @@ export default function PaceCard({ analysis, heightCm }: { analysis: Analysis; h
           {speed && <span className={`grade ${speed.cls}`}>{speed.en} {speed.zh}</span>}
         </div>
         <div className="stat">
-          <div className="k">Typical for your height 你身高的常见区间</div>
+          <div className="k">
+            Typical {club ? `(${CLUB_LABEL[club]})` : "for your height"} {club ? "该杆常见区间" : "你身高的常见区间"}
+          </div>
           <div className="v num">
-            ~{Math.round(r.bandLoMph)}–{Math.round(r.bandHiMph)}
-            <small> mph</small>
+            {r.speed === "na" && club === "putt" ? (
+              <small>n/a — putts aren&apos;t a speed read 推杆不看速度</small>
+            ) : (
+              <>
+                ~{Math.round(r.bandLoMph)}–{Math.round(r.bandHiMph)}
+                <small> mph</small>
+              </>
+            )}
           </div>
         </div>
       </div>

@@ -31,7 +31,11 @@ export type Metrics = {
   secondaryTiltDeg: number;
 };
 
-export type Fault = { title: string; mishit: string; detail: string; fix: string; focus: string };
+// `reported` is filled in only when the user has told us what the ball actually did
+// (lib/outcome.ts) and it relates to this fault — e.g. a reported slice next to a
+// measured out-to-in path. It is always framed as THEIR report meeting what we
+// MEASURED, never as the camera reading the clubface.
+export type Fault = { title: string; mishit: string; detail: string; fix: string; focus: string; reported?: string };
 
 // Hand (mid-wrist) speed over the swing, in body-heights per second.
 // Multiply by (standing height in m × 0.89) for m/s — nose-to-ankle ≈ 0.89 × stature.

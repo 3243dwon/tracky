@@ -44,6 +44,9 @@ export default function ComparePanel({ a, b, onClose }: { a: Side; b: Side; onCl
 
   const viewMismatch = a.meta.view !== b.meta.view;
   const heightMismatch = a.meta.heightCmAtSave !== b.meta.heightCmAtSave;
+  // Only a mismatch when BOTH sides tagged a club and they differ — an untagged
+  // (older / unset) swing doesn't trigger a false warning.
+  const clubMismatch = !!a.meta.clubAtSave && !!b.meta.clubAtSave && a.meta.clubAtSave !== b.meta.clubAtSave;
 
   const stillFor = (s: Side) => s.stills.find((x) => x.name === phase)?.url ?? s.stills[0]?.url;
   const label = (s: Side) => s.meta.label || s.meta.fileName;
@@ -125,7 +128,7 @@ export default function ComparePanel({ a, b, onClose }: { a: Side; b: Side; onCl
                 <tr key={r.label} className={better ? "worst" : ""}>
                   <td>
                     {r.label}
-                    {r.label === "Peak hand speed" && heightMismatch ? " ⚠" : ""}
+                    {r.label === "Peak hand speed" && (heightMismatch || clubMismatch) ? " ⚠" : ""}
                   </td>
                   <td className="num">{r.va.toFixed(r.digits)}</td>
                   <td className="num">{r.vb.toFixed(r.digits)}</td>
@@ -145,6 +148,12 @@ export default function ComparePanel({ a, b, onClose }: { a: Side; b: Side; onCl
         <p className="note">
           ⚠ The two swings were filmed at different heights ({a.meta.heightCmAtSave} vs {b.meta.heightCmAtSave} cm), so
           the mph comparison is approximate — speed is scaled from height.
+        </p>
+      )}
+      {clubMismatch && (
+        <p className="note">
+          ⚠ These were tagged different clubs ({a.meta.clubAtSave} vs {b.meta.clubAtSave}) — a longer club is swung
+          faster, so the hand-speed comparison isn&apos;t apples-to-apples. 这两杆标的是不同球杆，长杆挥得更快，手速不能直接比。
         </p>
       )}
       <p className="note">

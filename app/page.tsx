@@ -12,8 +12,10 @@ import {
   type Extraction,
   type SwingWindow,
 } from "@/lib/pose";
-import { analyzeClub, type ClubAnalysis } from "@/lib/club";
+import { analyzeClub, clubFault, type ClubAnalysis, type Hand } from "@/lib/club";
 import { readMetrics, type Grade } from "@/lib/grade";
+import type { Club } from "@/lib/pace";
+import { applyOutcome, outcomeChips, type Outcome } from "@/lib/outcome";
 import {
   SCHEMA,
   saveSwing,
@@ -96,6 +98,14 @@ const PHASE_LABEL: Record<PhaseName, string> = {
   finish: "Finish",
 };
 
+const CLUB_CHIP: Record<Club, string> = {
+  driver: "Driver 木杆",
+  iron: "Iron 铁杆",
+  wedge: "Wedge 挖起",
+  putt: "Putt 推杆",
+};
+const CLUB_KEYS: Club[] = ["driver", "iron", "wedge", "putt"];
+
 const fmtT = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 export default function Page() {
@@ -112,6 +122,9 @@ export default function Page() {
   const [skipped, setSkipped] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [heightCm, setHeightCmState] = useState(175);
+  const [hand, setHandState] = useState<Hand>("R"); // global, persisted — default R = today's behavior
+  const [clubs, setClubs] = useState<Record<string, Club>>({}); // per-swing, keyed by swing id
+  const [outcomes, setOutcomes] = useState<Record<string, Outcome>>({}); // per-swing
   const [seekSig, setSeekSig] = useState<{ t: number; n: number } | null>(null);
   const [overlay, setOverlay] = useState<"none" | "library" | "compare">("none");
   const [compare, setCompare] = useState<CompareData | null>(null);
@@ -128,6 +141,8 @@ export default function Page() {
   useEffect(() => {
     const saved = Number(localStorage.getItem("swingcv-height"));
     if (saved >= 120 && saved <= 220) setHeightCmState(saved);
+    const savedHand = localStorage.getItem("swingcv-hand");
+    if (savedHand === "R" || savedHand === "L") setHandState(savedHand);
     if (window.location.hash === "#demo") loadDemo();
     if (window.location.hash === "#library") setOverlay("library");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,6 +154,19 @@ export default function Page() {
       localStorage.setItem("swingcv-height", String(v));
     } catch {}
   }
+
+  function setHand(v: Hand) {
+    setHandState(v);
+    try {
+      localStorage.setItem("swingcv-hand", v);
+    } catch {}
+  }
+  // Per-swing tags (club, shot outcome) live in maps keyed by swing id, so each
+  // detected swing in a range session can carry its own — unlike the global height/hand.
+  const setClub = (id: string, c: Club) => setClubs((m) => ({ ...m, [id]: c }));
+  const clearClub = (id: string) => setClubs((m) => { const { [id]: _, ...rest } = m; return rest; });
+  const setOutcome = (id: string, o: Outcome) => setOutcomes((m) => ({ ...m, [id]: o }));
+  const clearOutcome = (id: string) => setOutcomes((m) => { const { [id]: _, ...rest } = m; return rest; });
 
   function loadDemo() {
     const mk = (label: string) => {
@@ -324,7 +352,9 @@ export default function Page() {
               continue;
             }
             // Clubhead arc (v3.5) from the motion frames, then free that buffer.
-            const club = analyzeClub(extraction.motion, extraction.frames, analysis.phases);
+            // hand only flips the verdict's feel-cue; the geometry is handedness-agnostic,
+            // and the fault copy is also recomputed live at render from the current hand.
+            const club = analyzeClub(extraction.motion, extraction.frames, analysis.phases, hand);
             extraction.motion = null;
             const tmp = document.createElement("canvas");
             const stills: Still[] = [];
@@ -415,6 +445,9 @@ export default function Page() {
         label: r.fileName.replace(/\.[^.]+$/, ""),
         view: a.metrics.view,
         heightCmAtSave: heightCm,
+        handAtSave: hand,
+        ...(clubs[r.id] ? { clubAtSave: clubs[r.id] } : {}),
+        ...(outcomes[r.id] ? { outcomeAtSave: outcomes[r.id] } : {}),
         tempoRatio: a.metrics.tempoRatio,
         backswingS: a.metrics.backswingS,
         downswingS: a.metrics.downswingS,
@@ -474,6 +507,11 @@ export default function Page() {
       stills: p.stills,
       saved: true,
     };
+    // Restore the per-swing tags this swing was saved with, and the handedness
+    // (global) if it was recorded, so the reopened verdict reads as it did at save.
+    if (m.clubAtSave) setClub(m.id, m.clubAtSave);
+    if (m.outcomeAtSave) setOutcome(m.id, m.outcomeAtSave);
+    if (m.handAtSave) setHand(m.handAtSave);
     setSwings([r]);
     setSel(0);
     setSkipped([]);
@@ -500,14 +538,23 @@ export default function Page() {
   const cur = swings[sel];
   const m = cur?.analysis.metrics;
   const club = cur?.club ?? null;
-  // Body faults (pose) + the clubhead fault (motion), shown as one list.
-  const allFaults = cur ? [...cur.analysis.faults, ...(club?.fault ? [club.fault] : [])] : [];
-  const topFault = allFaults[0];
+  // Per-swing user tags (default: unset → today's behavior).
+  const selClub = cur ? clubs[cur.id] ?? null : null;
+  const selOutcome = cur ? outcomes[cur.id] ?? null : null;
   // A window that only squeaked past the loosened quality gate — hedge the read and
   // drop the prescriptive drills/plan so a marginal track can't pose as a confident diagnosis.
   const lowConf = cur?.analysis.quality.confidence === "low";
+  // Recompute the clubhead fault's COPY from the CURRENT handedness (geometry is
+  // unchanged), so flipping the R/L toggle updates the feel-cue live.
+  const clubFaultLive = club ? clubFault(club, hand) : null;
+  // Body faults (pose) + the clubhead fault (motion), shown as one list, then
+  // RELATED (never reconciled) to the user's reported ball flight — re-ranks only
+  // faults that already fired; on a low-confidence trace it relates to nothing.
+  const baseFaults = cur ? [...cur.analysis.faults, ...(clubFaultLive ? [clubFaultLive] : [])] : [];
+  const { faults: allFaults, note: outcomeNote } = applyOutcome(baseFaults, selOutcome, hand, lowConf);
+  const topFault = allFaults[0];
   // Good/okay/needs-work ratings + a data-driven suggestive read of the metrics.
-  const mread = m ? readMetrics(m, cur.analysis.speed) : null;
+  const mread = m ? readMetrics(m, cur.analysis.speed, selClub) : null;
   const idle = stage === "idle" || stage === "done" || stage === "error";
   const showMain = overlay === "none";
 
@@ -766,6 +813,37 @@ export default function Page() {
             </button>
           </div>
 
+          <div
+            className="swsetup"
+            style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", alignItems: "center", margin: "0 0 10px" }}
+          >
+            <span className="note" style={{ margin: 0 }}>
+              Handedness 持杆手
+            </span>
+            <div style={{ display: "inline-flex", gap: 6 }}>
+              <button className={hand === "R" ? "chip on" : "chip"} onClick={() => setHand("R")}>
+                Right 右手
+              </button>
+              <button className={hand === "L" ? "chip on" : "chip"} onClick={() => setHand("L")}>
+                Left 左手
+              </button>
+            </div>
+            <span className="note" style={{ margin: "0 0 0 6px" }}>
+              Club 球杆 <small style={{ opacity: 0.7 }}>· optional 可选</small>
+            </span>
+            <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+              {CLUB_KEYS.map((c) => (
+                <button
+                  key={c}
+                  className={selClub === c ? "chip on" : "chip"}
+                  onClick={() => (selClub === c ? clearClub(cur.id) : setClub(cur.id, c))}
+                >
+                  {CLUB_CHIP[c]}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <ScrubHero key={cur.id} extraction={cur.extraction} analysis={cur.analysis} />
 
           <Reveal>
@@ -799,7 +877,7 @@ export default function Page() {
             <Reveal>
               <div className="section-title">Hand speed 手部速度</div>
               <div className="card">
-                <SpeedChart analysis={cur.analysis} heightCm={heightCm} onHeightCm={setHeightCm} />
+                <SpeedChart analysis={cur.analysis} heightCm={heightCm} onHeightCm={setHeightCm} club={selClub} />
               </div>
             </Reveal>
           )}
@@ -808,7 +886,7 @@ export default function Page() {
             <Reveal>
               <div className="section-title">Too fast or too slow? 节奏与速度自检</div>
               <div className="card">
-                <PaceCard analysis={cur.analysis} heightCm={heightCm} />
+                <PaceCard analysis={cur.analysis} heightCm={heightCm} club={selClub} />
               </div>
             </Reveal>
           )}
@@ -908,6 +986,29 @@ export default function Page() {
           <Glossary />
 
           <Reveal>
+            <div className="section-title">
+              What did this ball do? 这一杆怎么飞的？ <small style={{ opacity: 0.7 }}>· optional 可选</small>
+            </div>
+            <p className="note" style={{ marginTop: -2 }}>
+              The camera can&apos;t see your ball or clubface — but you can. Tell us and we&apos;ll <b>relate</b> it to
+              what we measured; it never becomes something we claim to have seen. This is how a slice gets told apart
+              from a pull. 镜头看不到你的球和杆面——但你看得到。告诉我们，我们会把它和测量结果<b>关联</b>；它绝不会变成我们
+              「看到」的东西。右曲和拉球就是这样区分开的。
+            </p>
+            <div className="swchips" style={{ marginTop: 2 }}>
+              {outcomeChips(hand).map(({ key, label }) => (
+                <button
+                  key={key}
+                  className={selOutcome === key ? "chip on" : "chip"}
+                  onClick={() => (selOutcome === key ? clearOutcome(cur.id) : setOutcome(cur.id, key))}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Reveal>
+
+          <Reveal>
             <div className="section-title">Faults that actually cost strokes 真正让你丢杆的问题</div>
             {allFaults.length > 0 ? (
               <>
@@ -923,6 +1024,11 @@ export default function Page() {
                     <div className="t">{f.title}</div>
                     <div className="d">→ {f.mishit}</div>
                     <div className="d">{f.detail}</div>
+                    {f.reported && (
+                      <div className="d" style={{ marginTop: 6, color: "#62d6ff" }}>
+                        <b>You reported · 你的反馈：</b> {f.reported}
+                      </div>
+                    )}
                     {f.fix && !lowConf && (
                       <div className="d" style={{ marginTop: 6 }}>
                         <b style={{ color: "#5fd36a" }}>Try this · 这样练：</b> {f.fix}
@@ -942,6 +1048,12 @@ export default function Page() {
               </div>
             )}
           </Reveal>
+
+          {outcomeNote && (
+            <p className="note" style={{ marginTop: 8, borderLeft: "2px solid rgba(98,214,255,0.4)", paddingLeft: 10 }}>
+              {outcomeNote}
+            </p>
+          )}
 
           {cur.analysis.notes.length > 0 && (
             <>
@@ -1098,9 +1210,12 @@ export default function Page() {
               </li>
               <li>
                 <b>Strike location &amp; ball flight 触球位置与球路</b> — the five impact factors that actually
-                determine where the ball goes live on the club face, not in your joints.
+                determine where the ball goes live on the club face, not in your joints. It still <b>doesn&apos;t read
+                the face or watch the ball</b> — but you can now <b>tell it what the ball did</b>, and it relates that
+                to the path it measured (your report never becomes something it claims to have seen).
                 <br />
-                真正决定球往哪走的五个触球要素发生在杆面上，不在你的关节里。
+                真正决定球往哪走的五个触球要素发生在杆面上，不在你的关节里。它仍然<b>不读杆面、不看球</b>——但你现在可以
+                <b>告诉它球怎么飞的</b>，它会把这和量到的路径关联（你的反馈绝不会变成它「看到」的东西）。
               </li>
             </ul>
             <p>
@@ -1117,10 +1232,10 @@ export default function Page() {
             Runs entirely on your device — nothing is uploaded. 2D single-camera pose: reliable for tempo, head
             stability and key positions; rotation/speed and the clubhead tracer are honest estimates; it{" "}
             <b>can&apos;t see the clubface</b>, so it flags an over-the-top path but can&apos;t separate a slice from a
-            pull.
+            pull on its own — your one-tap report is what tells them apart.
             <br />
             全程在你的设备上运行，不上传任何东西。二维单摄像头姿态：节奏、头部稳定性和关键位置可靠；旋转/速度和杆头
-            追踪是诚实的估算；它<b>看不到杆面</b>，所以能标记过顶轨迹，但无法区分右曲和拉球。
+            追踪是诚实的估算；它<b>看不到杆面</b>，所以能标记过顶轨迹，但自己无法区分右曲和拉球——这要靠你的一键反馈。
           </p>
           <p className="footer">Tracky · on-device pose via MediaPipe · no upload · no account</p>
         </div>
