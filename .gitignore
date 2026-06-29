@@ -10,3 +10,6 @@ next-env.d.ts
 
 # test coverage
 /coverage
+
+# stray tooling logs
+*.log
