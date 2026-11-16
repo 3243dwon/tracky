@@ -1,0 +1,23 @@
+# Every gate, on every pull request, before anything reaches main. The gates are the
+# repo's own (lint, typecheck, test, build, gate:*, pytest), run by the base verify CLI
+# from 3243dwon/kitchen — the same file `node ~/.claude/kitchen/verify.mjs gates` runs.
+name: check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: 3243dwon/kitchen@v1
